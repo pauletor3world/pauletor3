@@ -642,7 +642,8 @@ function Done({ onDone }: { onDone: () => void }) {
             run("fin", async () => {
               await api.finishSetup();
               await autostartOn().catch(() => {});
-            }).then((r) => r !== undefined && onDone())
+              return true;
+            }).then((r) => r && onDone())
           }
         >
           Abrir o pAuletOr 3
