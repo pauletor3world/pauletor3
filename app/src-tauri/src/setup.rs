@@ -26,6 +26,8 @@ pub struct SetupSuggestion {
     pub free_space: Option<u64>,
     /// Convite que abriu o app (link `pauletor3://...`), se houver.
     pub pending_invite: Option<String>,
+    /// Mundo que a v1 deixou neste PC (o mais recente), para importar.
+    pub local_world: Option<String>,
 }
 
 #[tauri::command]
@@ -39,6 +41,10 @@ pub async fn setup_suggest_dir(state: State<'_, AppState>) -> CmdResult<SetupSug
         minecraft_dir: pauletor3_core::config::default_minecraft_dir().map(|p| p.display().to_string()),
         launchers: pauletor3_core::launcher::detect(),
         pending_invite: state.pending_invite.lock().unwrap().clone(),
+        local_world: paths::resolve_data_dir()
+            .map(|d| d.join("server").join("world"))
+            .filter(|w| w.join("level.dat").exists())
+            .map(|w| w.display().to_string()),
     })
 }
 

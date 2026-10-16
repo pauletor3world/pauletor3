@@ -225,7 +225,7 @@ impl Engine {
         }
         let journal = Journal::open(paths.root.join("journal-queue.json"), config.journal.clone(), None, &config.world_name);
         let status = Status {
-            configured: config.setup_complete,
+            configured: config.ready(),
             phase: Phase::Idle,
             player_name: config.player_name.clone(),
             world_name: config.world_name.clone(),
@@ -330,7 +330,7 @@ impl Engine {
         let c2 = c.clone();
         drop(c);
         self.set_status(|s| {
-            s.configured = c2.setup_complete;
+            s.configured = c2.ready();
             s.player_name = c2.player_name.clone();
             s.world_name = c2.world_name.clone();
             s.is_owner = c2.is_owner;
@@ -486,7 +486,17 @@ impl Engine {
             ws.save(&*b.remote).await?;
         }
         if let Some(f) = folder {
+            let was_local = f == self.paths.world();
             self.import_world(f).await?;
+            if was_local {
+                // o mundo que a v1 deixou aqui virou a primeira versão do mundo novo
+                let mut st = LocalState::load(&self.paths);
+                st.dirty = false;
+                st.active_session = None;
+                st.current_manifest = None;
+                st.save(&self.paths)?;
+                self.set_status(|s| s.recovery_pending = false);
+            }
         }
         let _ = self.refresh().await;
         Ok(())
@@ -664,7 +674,7 @@ impl Engine {
     /// sabe e volta com a fotografia do mundo.
     async fn tick(self: &Arc<Self>, n: u64) -> NmResult<()> {
         let cfg = self.config.read().await.clone();
-        if !cfg.setup_complete {
+        if !cfg.ready() {
             return Ok(());
         }
         let Some(node) = self.node().await else { return Ok(()) };
@@ -1822,6 +1832,14 @@ impl Engine {
         if !st.dirty {
             return Ok(());
         }
+        let r = self.recover_inner(st).await;
+        if r.is_err() {
+            self.phase(Phase::Idle);
+        }
+        r
+    }
+
+    async fn recover_inner(self: &Arc<Self>, st: LocalState) -> NmResult<()> {
         self.phase(Phase::Recovering);
         let active = st.active_session.clone();
         let cfg = self.config.read().await.clone();

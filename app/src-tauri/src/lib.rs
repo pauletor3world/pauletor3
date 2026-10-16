@@ -119,7 +119,7 @@ fn start_background(app: AppHandle, engine: Arc<Engine>) {
     tauri::async_runtime::spawn(engine.journal.clone().run());
     tauri::async_runtime::spawn(async move {
         let cfg = engine.config.read().await.clone();
-        if !cfg.setup_complete {
+        if !cfg.ready() {
             return;
         }
         if engine.status().recovery_pending {

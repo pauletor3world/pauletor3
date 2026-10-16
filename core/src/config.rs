@@ -91,6 +91,12 @@ impl Config {
         }
     }
 
+    /// Pronto para usar: assistente concluído e ligado a um mundo da v2. Uma config da v1
+    /// (Drive/Tailscale) não tem mundo e volta para o assistente.
+    pub fn ready(&self) -> bool {
+        self.setup_complete && self.joined()
+    }
+
     /// Ligado a um mundo (coordenação + id).
     pub fn joined(&self) -> bool {
         self.coordinator_url.is_some() && self.world_id.is_some()

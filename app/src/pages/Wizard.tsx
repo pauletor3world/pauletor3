@@ -336,6 +336,20 @@ function WorldStep({ next, back }: { next: () => void; back: () => void }) {
   const p = useSyncProgress();
   const { busy, error, setError, run } = useAction();
   const nickOk = /^[A-Za-z0-9_]{3,16}$/.test(nick);
+  // PC que vem da v1: o mundo dela (mais recente, com a última sessão) já fica escolhido
+  useEffect(() => {
+    api
+      .suggestDir()
+      .then(async (s) => {
+        if (!s.local_world) return;
+        const info = await api.probeWorldFolder(s.local_world).catch(() => null);
+        if (info) {
+          setFolder(s.local_world);
+          setLevel(info);
+        }
+      })
+      .catch(() => {});
+  }, []);
   const pick = async () => {
     const f = await open({ directory: true, title: "Escolha a pasta do mundo (a que tem o level.dat)" });
     if (typeof f !== "string") return;
@@ -373,7 +387,9 @@ function WorldStep({ next, back }: { next: () => void; back: () => void }) {
         <div className="rounded-2xl bg-night-850/70 ring-1 ring-white/[0.06] p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="font-semibold">{folder ? level?.level_name || "Mundo escolhido" : "Mundo novo"}</div>
+              <div className="font-semibold">
+                {folder ? (folder.toLowerCase().endsWith("\\server\\world") ? "O mundo que já está neste PC (o mais recente)" : level?.level_name || "Mundo escolhido") : "Mundo novo"}
+              </div>
               <div className="text-[12.5px] text-ink-muted">
                 {folder
                   ? `Minecraft ${level?.version_name} · ${level?.difficulty} · ${level?.hardcore ? "hardcore" : level?.game_type}`

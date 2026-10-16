@@ -261,6 +261,7 @@ export interface SetupSuggestion {
   launchers: LauncherCandidate[];
   free_space: number | null;
   pending_invite: string | null;
+  local_world: string | null;
 }
 
 export interface AppInfo {

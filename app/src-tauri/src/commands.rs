@@ -79,7 +79,7 @@ pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
     let (configured, owner, dir) = match &e {
         Some(e) => {
             let c = e.config.read().await;
-            (c.setup_complete, c.is_owner, Some(e.paths.root.display().to_string()))
+            (c.ready(), c.is_owner, Some(e.paths.root.display().to_string()))
         }
         None => (false, false, None),
     };
