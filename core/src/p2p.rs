@@ -27,8 +27,13 @@ use crate::sync::ObjectSource;
 pub const ALPN_MC: &[u8] = b"pauletor3/mc/1";
 pub const ALPN_SYNC: &[u8] = b"pauletor3/sync/1";
 
-/// Versão do cabeçalho do túnel do jogo.
+/// Versão do cabeçalho do túnel do jogo. V1: liga direto. V2: o host espera o servidor dele
+/// estar de pé (host acabando de assumir) e responde um byte [`MC_READY`] antes do jogo passar.
 const MC_TUNNEL_V1: u8 = 1;
+const MC_TUNNEL_V2: u8 = 2;
+const MC_READY: u8 = 0;
+/// Quanto o host segura um túnel V2 esperando o servidor abrir.
+const MC_WAIT_SERVER: Duration = Duration::from_secs(300);
 const MAX_REQUEST: u32 = 4096;
 /// Pedidos de objetos em paralelo para um mesmo amigo.
 const PARALLEL: usize = 8;
@@ -181,11 +186,12 @@ impl Node {
         Ok(c)
     }
 
-    /// Abre um túnel de jogo até o host (um stream por conexão TCP do Minecraft).
+    /// Abre um túnel de jogo até o host (um stream por conexão TCP do Minecraft). Antes de
+    /// mandar o jogo, espere [`wait_game_ready`]: o host responde quando o servidor está de pé.
     pub async fn open_game_stream(&self, host: &EndpointAddr) -> anyhow::Result<(SendStream, RecvStream)> {
         let conn = self.connection(host, ALPN_MC).await?;
         let (mut send, recv) = conn.open_bi().await.map_err(|e| anyhow!("{e}"))?;
-        send.write_all(&[MC_TUNNEL_V1]).await?;
+        send.write_all(&[MC_TUNNEL_V2]).await?;
         Ok((send, recv))
     }
 
@@ -266,21 +272,51 @@ impl ProtocolHandler for McHandler {
             return Ok(());
         }
         loop {
-            let (send, mut recv) = match conn.accept_bi().await {
+            let (mut send, mut recv) = match conn.accept_bi().await {
                 Ok(s) => s,
                 Err(_) => return Ok(()),
             };
             let shared = self.0.clone();
             tokio::spawn(async move {
                 let mut hdr = [0u8; 1];
-                if recv.read_exact(&mut hdr).await.is_err() || hdr[0] != MC_TUNNEL_V1 {
+                if recv.read_exact(&mut hdr).await.is_err() {
                     return;
                 }
-                let Some(port) = *shared.game_port.borrow() else {
+                let port = match hdr[0] {
+                    MC_TUNNEL_V1 => *shared.game_port.borrow(),
+                    MC_TUNNEL_V2 => {
+                        // Este PC pode estar acabando de assumir: espera o servidor abrir. Se o
+                        // amigo desistir (stream fechado), para de esperar.
+                        let mut rx = shared.game_port.subscribe();
+                        let mut probe = [0u8; 1];
+                        tokio::select! {
+                            r = tokio::time::timeout(MC_WAIT_SERVER, rx.wait_for(|p| p.is_some())) => match r {
+                                Ok(Ok(p)) => *p,
+                                _ => None,
+                            },
+                            _ = tokio::io::AsyncReadExt::read(&mut recv, &mut probe) => None,
+                        }
+                    }
+                    _ => return,
+                };
+                let Some(port) = port else {
                     tracing::info!("pedido de jogo, mas este PC não está hospedando");
                     return;
                 };
-                match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                let mut tcp = None;
+                for _ in 0..10 {
+                    match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
+                        Ok(t) => {
+                            tcp = Some(t);
+                            break;
+                        }
+                        Err(_) => tokio::time::sleep(Duration::from_millis(500)).await,
+                    }
+                }
+                if hdr[0] == MC_TUNNEL_V2 && tcp.is_some() && send.write_all(&[MC_READY]).await.is_err() {
+                    return;
+                }
+                match tcp.ok_or_else(|| anyhow!("servidor local não respondeu")) {
                     Ok(mut tcp) => {
                         let _ = tcp.set_nodelay(true);
                         shared.active_tunnels.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -293,6 +329,16 @@ impl ProtocolHandler for McHandler {
             });
         }
     }
+}
+
+/// Espera o host dizer que o servidor está de pé (túnel V2).
+pub async fn wait_game_ready(recv: &mut RecvStream) -> anyhow::Result<()> {
+    let mut b = [0u8; 1];
+    tokio::io::AsyncReadExt::read_exact(recv, &mut b).await.context("o host fechou o túnel")?;
+    if b[0] != MC_READY {
+        anyhow::bail!("resposta estranha do host");
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------ réplica (servir)
@@ -531,8 +577,14 @@ mod tests {
                 });
             }
         });
-        a.set_hosting(Some(port));
+        // o túnel abre antes do servidor e espera ele ficar pronto
         let (mut send, mut recv) = b.open_game_stream(&a.endpoint.addr()).await.unwrap();
+        let a2 = a.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            a2.set_hosting(Some(port));
+        });
+        wait_game_ready(&mut recv).await.unwrap();
         send.write_all(b"ola minecraft").await.unwrap();
         let mut buf = [0u8; 13];
         recv.read_exact(&mut buf).await.unwrap();

@@ -14,14 +14,14 @@ Não precisa criar conta, instalar VPN, abrir porta nem configurar nada.
 Clique em **Jogar**. O app abre o Minecraft; no **Multiplayer**, entre em **pAuletOr 3** (endereço `localhost`, sempre o mesmo).
 
 - **Alguém já está hospedando?** Você entra direto no mundo dessa pessoa.
-- **Ninguém está?** O mundo acorda no seu PC (alguns segundos) e os amigos entram no seu.
-- Também funciona sem o app em primeiro plano: tentar entrar em **pAuletOr 3** com o mundo livre já acorda o mundo; espere a mensagem e entre de novo.
+- **Ninguém está?** O mundo acorda no seu PC (alguns segundos) e os amigos entram no seu. O app deixa o mundo em dia em segundo plano, então só a primeira vez num PC novo demora.
+- Também funciona sem o app em primeiro plano: entrar em **pAuletOr 3** com o mundo livre já acorda o mundo. O jogo fica em “Entrando...” por alguns segundos e entra sozinho.
 
 ## Durante o jogo
 
 - O mundo é salvo sozinho a cada poucos minutos.
-- **Se quem hospeda cair** (luz, internet), aparece “Trocando de host…”. Em até ~1 minuto e meio, um amigo que estava jogando assume sozinho. Entre de novo em **pAuletOr 3**: o mundo continua do último salvamento.
-- **Vai sair e seus amigos continuam?** Pode fechar o seu Minecraft: o mundo segue para eles. Se precisar **desligar o PC**, use **Passar a vez**: alguém assume na hora, sem perder nada.
+- **Vai sair e seus amigos continuam?** Pode fechar o seu Minecraft: o mundo segue para eles. Se precisar **desligar o PC**, clique em **Passar o host** (ou feche o app): o mundo vai para o PC de quem está jogando. Ninguém é desconectado: o jogo deles mostra “Entrando...” por alguns segundos e volta sozinho, de onde parou.
+- **Se quem hospeda cair de repente** (luz, internet), o jogo dos outros desconecta e aparece “Trocando de host…”. Entre de novo em **pAuletOr 3**: você espera na porta (“Entrando...”) enquanto um amigo assume, e entra sozinho. O mundo continua do último salvamento.
 - O mundo fecha e é guardado sozinho quando o último jogador sai.
 
 ## A turma, o diário e as versões

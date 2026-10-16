@@ -54,10 +54,24 @@ sequenceDiagram
   Note over W: 30 s sem heartbeat nem aviso de membro → vez expira
   B->>W: acquire (preferência para a réplica mais nova por 15 s)
   W-->>B: session_number = n+1
-  B->>B: monta o HEAD (já está no cache) e sobe o servidor
+  B->>B: aplica a diferença do HEAD (já está no cache) e sobe o servidor
   Note over B: proxy dos amigos aponta para B
   A->>W: (se voltar) HEAD CAS com n → lost_lock: vira manifesto solto
 ```
+
+## Troca planejada (Parar com amigos jogando)
+
+1. O host marca `handing_over` e avisa no chat. Os proxies dos amigos passam a segurar entradas novas.
+2. Salva e publica com todo mundo jogando; a réplica em segundo plano dos amigos baixa e **já aplica** essa versão no mundo deles.
+3. Quando um amigo jogando confirma a réplica (presença), o host roda `/transfer 127.0.0.1 <porta>`: cada jogo volta para o **próprio proxy**, que o segura em “Entrando...” (consultas de login que o cliente responde sozinho; o jogo desiste com 30 s sem nada).
+4. O servidor fecha, os segundos finais são enviados e a vez é liberada com `handoff`: fica “vencida agora” com `handing_over`, e quem joga assume pelo caminho do failover (a réplica mais nova tem preferência).
+5. O túnel V2 deixa o amigo abrir o stream antes do servidor do novo host existir: o host responde um byte quando o servidor está de pé, e o proxy então repassa o login guardado (uma entrada por `/transfer` vira login normal).
+
+A mesma sala de espera serve para acordar o mundo (entrar com o mundo livre) e para quem entra durante uma queda.
+
+## Mundo local sempre em dia
+
+`pull` aplica só a diferença: compara o mundo local com o manifesto (índice de hash por tamanho e data) e troca por renomeação apenas os arquivos que mudaram. A réplica em segundo plano também aplica a versão nova no mundo local quando o PC está parado, então o Jogar não monta nada.
 
 ## Regras de segurança do mundo
 

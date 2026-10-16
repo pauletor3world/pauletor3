@@ -50,9 +50,11 @@ impl LeaseManager {
     }
 
     /// Pede a vez de novo enquanto a resposta for "outro tem preferência" (failover).
-    pub async fn acquire_patiently(&self, req: AcquireRequest, max_wait: Duration) -> NmResult<LeaseGuard> {
+    /// `replica` é relido a cada tentativa: a réplica deste PC pode avançar enquanto espera.
+    pub async fn acquire_patiently(&self, mut req: AcquireRequest, max_wait: Duration, replica: impl Fn() -> u64) -> NmResult<LeaseGuard> {
         let deadline = tokio::time::Instant::now() + max_wait;
         loop {
+            req.replica_seq = req.replica_seq.max(replica());
             match self.acquire(req.clone()).await {
                 Err(NmError::NotBestCandidate { .. }) if tokio::time::Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -202,7 +204,13 @@ impl LeaseGuard {
     /// Libera a vez. Só chame depois que o HEAD final foi gravado.
     pub async fn release(&self) -> NmResult<()> {
         self.stop_heartbeat().await;
-        self.mgr.coord.release(self.session_number).await
+        self.mgr.coord.release(self.session_number, false).await
+    }
+
+    /// Passa o host: libera a vez para quem está jogando assumir na hora (failover planejado).
+    pub async fn release_handoff(&self) -> NmResult<()> {
+        self.stop_heartbeat().await;
+        self.mgr.coord.release(self.session_number, true).await
     }
 
     /// Para o heartbeat sem liberar (a vez expira sozinha).

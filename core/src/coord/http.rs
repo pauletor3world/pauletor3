@@ -210,8 +210,9 @@ struct HeartbeatReq<'a> {
 }
 
 #[derive(Serialize)]
-struct SessionReq {
+struct ReleaseReq {
     session_number: u64,
+    handoff: bool,
 }
 
 #[derive(Serialize)]
@@ -249,8 +250,11 @@ impl Coordinator for HttpCoordinator {
         self.api.json(reqwest::Method::POST, &self.api.world_path("lease/heartbeat"), Some(&r)).await
     }
 
-    async fn release(&self, session_number: u64) -> NmResult<()> {
-        let _: Ok_ = self.api.json(reqwest::Method::POST, &self.api.world_path("lease/release"), Some(&SessionReq { session_number })).await?;
+    async fn release(&self, session_number: u64, handoff: bool) -> NmResult<()> {
+        let _: Ok_ = self
+            .api
+            .json(reqwest::Method::POST, &self.api.world_path("lease/release"), Some(&ReleaseReq { session_number, handoff }))
+            .await?;
         Ok(())
     }
 

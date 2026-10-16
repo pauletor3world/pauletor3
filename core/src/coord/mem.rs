@@ -225,10 +225,18 @@ impl Coordinator for MemCoordinator {
         }
     }
 
-    async fn release(&self, session_number: u64) -> NmResult<()> {
+    async fn release(&self, session_number: u64, handoff: bool) -> NmResult<()> {
+        let now = self.hub.clock.now();
         let mut w = self.guard()?;
         if matches!(&w.lease, Some(l) if l.holder == self.me && l.session_number == session_number) {
-            w.lease = None;
+            if handoff {
+                let l = w.lease.as_mut().unwrap();
+                l.heartbeat_at = now - Duration::seconds(rules::LEASE_TTL_SECS);
+                l.vouched_at = None;
+                l.handing_over = true;
+            } else {
+                w.lease = None;
+            }
         }
         Ok(())
     }
@@ -268,7 +276,7 @@ impl Coordinator for MemCoordinator {
             let mut w = self.guard()?;
             self.member(&w)?;
             if let (Some(sn), Some(l)) = (p.host_reachable, w.lease.as_mut()) {
-                if l.session_number == sn && l.holder != self.me {
+                if l.session_number == sn && l.holder != self.me && !l.handing_over {
                     l.vouched_at = Some(now);
                 }
             }
@@ -380,7 +388,7 @@ mod tests {
         let h = a.publish_head(la.session_number, None, "m1").await.unwrap();
         assert_eq!(h.seq, 1);
         assert!(matches!(a.publish_head(la.session_number, None, "m2").await, Err(NmError::HeadMoved { .. })));
-        a.release(la.session_number).await.unwrap();
+        a.release(la.session_number, false).await.unwrap();
         let lb = b.acquire(req("s2", 1)).await.unwrap();
         assert!(lb.session_number > la.session_number, "session_number monotônico");
         // a vez velha não publica mais

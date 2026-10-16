@@ -426,6 +426,7 @@ async fn run_up(
         if let Some(s) = stop_after {
             if started.elapsed() >= Duration::from_secs(s) {
                 engine.stop(EndReason::UserStop).await.map_err(e)?;
+                engine.wait_successor(Duration::from_secs(90)).await;
                 break;
             }
         }

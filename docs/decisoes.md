@@ -24,7 +24,7 @@ Conferido em 16/10/2026. A v1 (Drive + Tailscale + DuckDNS) está na tag `v1-fin
 |---|---|
 | Pausa do jogo num checkpoint | 26 ms |
 | Queda do host → amigo começa a assumir | 33 s |
-| Montar o mundo a partir da réplica local | 4–11 s |
+| Atualizar o mundo local (só a diferença, já no cache) | < 2 s numa sessão típica |
 | Servidor subir (com Fabric já aquecido) | ~5–30 s |
 | Integridade após failover (terceiro PC) | idêntico, hash a hash |
 | Testes | 60 unitários + 10 integração (Rust), 13 do Worker, contrato Rust↔Worker local **e em produção** |

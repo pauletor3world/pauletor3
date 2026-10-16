@@ -490,13 +490,77 @@ impl SyncEngine {
             return Ok(PullOutcome::UpToDate);
         }
         let m = self.fetch_manifest(&head.manifest).await?;
-        self.materialize(&m, &self.paths.server(), progress).await?;
+        if self.paths.world().join("level.dat").exists() {
+            // Já existe um mundo aqui: só o que mudou desde a última vez é baixado e trocado.
+            self.apply_delta(&m, progress).await?;
+        } else {
+            self.materialize(&m, &self.paths.server(), progress).await?;
+        }
         let mut st = LocalState::load(&self.paths);
         st.current_manifest = Some(m.id.clone());
         st.dirty = false;
         st.save(&self.paths)?;
         self.mark_replica(head.seq, &head.manifest)?;
         Ok(PullOutcome::Updated)
+    }
+
+    /// Deixa `server/` igual a `m` mexendo só nos arquivos que mudaram. Cada arquivo novo é
+    /// conferido e trocado por renomeação; se algo interromper no meio, o mundo local fica
+    /// marcado como "sem versão" e o próximo `pull` termina o serviço (o que já foi trocado
+    /// confere e é pulado).
+    pub async fn apply_delta(&self, m: &Manifest, progress: SyncProgressFn) -> NmResult<()> {
+        let server = self.paths.server();
+        let index_path = self.paths.hash_index();
+        let (m2, srv, idx) = (m.clone(), server.clone(), index_path.clone());
+        let (writes, removes) = tokio::task::spawn_blocking(move || plan_delta(&m2, &srv, &idx))
+            .await
+            .map_err(|e| anyhow::anyhow!(e))??;
+        if writes.is_empty() && removes.is_empty() {
+            return Ok(());
+        }
+        tracing::info!(trocar = writes.len(), apagar = removes.len(), "atualizando o mundo local só no que mudou");
+        let mut sub = m.clone();
+        sub.files.retain(|k, _| writes.contains(k));
+        self.fetch_objects(&sub, progress.clone()).await?;
+
+        let mut st = LocalState::load(&self.paths);
+        st.current_manifest = None;
+        st.save(&self.paths)?;
+
+        let cache = self.paths.cache_objects();
+        tokio::task::spawn_blocking(move || -> NmResult<()> {
+            let mut index = HashIndex::load(&index_path);
+            let total: u64 = sub.files.values().map(|e| e.size).sum();
+            let n = sub.files.len() as u64;
+            let mut done = 0u64;
+            for (i, (rel, e)) in sub.files.iter().enumerate() {
+                let dst = util::join_rel(&server, rel)?;
+                let parent = dst.parent().map(Path::to_path_buf).unwrap_or_else(|| server.clone());
+                std::fs::create_dir_all(&parent)?;
+                let name = dst.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let tmp = parent.join(format!(".nm-tmp-{name}"));
+                if let Err(err) = copy_verified(&cache, rel, e, &tmp) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(err);
+                }
+                util::replace_file(&tmp, &dst)?;
+                let mtime = std::fs::metadata(&dst).map(|md| util::mtime_ns(&md)).unwrap_or(e.mtime);
+                index.insert(rel, FileEntry { hash: e.hash.clone(), size: e.size, mtime });
+                done += e.size;
+                progress(SyncProgress { phase: SyncPhase::Assembling, bytes_done: done, bytes_total: total, files_done: i as u64 + 1, files_total: n });
+            }
+            for rel in &removes {
+                let f = util::join_rel(&server, rel)?;
+                if f.exists() {
+                    std::fs::remove_file(&f)?;
+                }
+            }
+            index.save(&index_path)?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!(e))??;
+        Ok(())
     }
 
     /// Baixa o que falta para o cache, confere hashes e monta `target_server_dir` de forma atômica.
@@ -672,7 +736,6 @@ fn parse_manifest(id: &str, bytes: &[u8]) -> NmResult<Manifest> {
 
 /// Copia cada arquivo do cache para a montagem, conferindo o hash durante a cópia.
 fn assemble(m: &Manifest, cache: &Path, out: &Path, progress: SyncProgressFn) -> NmResult<()> {
-    use sha2::{Digest, Sha256};
     std::fs::create_dir_all(out)?;
     for d in manifest::SYNCED_DIRS {
         std::fs::create_dir_all(out.join(d))?;
@@ -685,34 +748,73 @@ fn assemble(m: &Manifest, cache: &Path, out: &Path, progress: SyncProgressFn) ->
         if let Some(p) = dst.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let mut src = std::fs::File::open(cache.join(&e.hash))
-            .map_err(|err| NmError::Integrity(format!("objeto {} ausente no cache: {err}", &e.hash[..12])))?;
-        let mut f = std::fs::File::create(&dst)?;
-        let mut h = Sha256::new();
-        let mut buf = vec![0u8; 1 << 20];
-        let mut written = 0u64;
-        loop {
-            let k = src.read(&mut buf)?;
-            if k == 0 {
-                break;
-            }
-            h.update(&buf[..k]);
-            f.write_all(&buf[..k])?;
-            written += k as u64;
-        }
-        f.sync_all()?;
-        if written != e.size || hex::encode(h.finalize()) != e.hash {
-            let _ = std::fs::remove_file(cache.join(&e.hash));
-            return Err(NmError::Integrity(format!("{rel} não confere com o manifesto")));
-        }
-        if e.mtime > 0 {
-            let t = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(e.mtime as u64);
-            let _ = f.set_modified(t);
-        }
+        copy_verified(cache, rel, e, &dst)?;
         done += e.size;
         progress(SyncProgress { phase: SyncPhase::Assembling, bytes_done: done, bytes_total: total, files_done: i as u64 + 1, files_total: n });
     }
     Ok(())
+}
+
+/// Copia um objeto do cache para `dst`, conferindo tamanho e hash durante a cópia, e devolve a
+/// data de modificação original ao arquivo.
+fn copy_verified(cache: &Path, rel: &str, e: &FileEntry, dst: &Path) -> NmResult<()> {
+    use sha2::{Digest, Sha256};
+    let mut src = std::fs::File::open(cache.join(&e.hash))
+        .map_err(|err| NmError::Integrity(format!("objeto {} ausente no cache: {err}", &e.hash[..12])))?;
+    let mut f = std::fs::File::create(dst)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    let mut written = 0u64;
+    loop {
+        let k = src.read(&mut buf)?;
+        if k == 0 {
+            break;
+        }
+        h.update(&buf[..k]);
+        f.write_all(&buf[..k])?;
+        written += k as u64;
+    }
+    f.sync_all()?;
+    if written != e.size || hex::encode(h.finalize()) != e.hash {
+        let _ = std::fs::remove_file(cache.join(&e.hash));
+        return Err(NmError::Integrity(format!("{rel} não confere com o manifesto")));
+    }
+    if e.mtime > 0 {
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_nanos(e.mtime as u64);
+        let _ = f.set_modified(t);
+    }
+    Ok(())
+}
+
+/// O que precisa mudar em `server` para ficar igual a `m`: arquivos a (re)escrever e a apagar.
+/// Arquivo com mesmo tamanho e data que o índice conhece não é relido; os outros têm o hash
+/// calculado (e entram no índice).
+fn plan_delta(m: &Manifest, server: &Path, index_path: &Path) -> NmResult<(BTreeSet<String>, Vec<String>)> {
+    let mut index = HashIndex::load(index_path);
+    let local: HashMap<String, (PathBuf, std::fs::Metadata)> =
+        manifest::list_synced_files(server)?.into_iter().map(|(rel, p, md)| (rel, (p, md))).collect();
+    let mut writes = BTreeSet::new();
+    for (rel, e) in &m.files {
+        let same = match local.get(rel) {
+            Some((path, md)) if md.len() == e.size => {
+                let mtime = util::mtime_ns(md);
+                let hash = match index.lookup(rel, md.len(), mtime) {
+                    Some(h) => Some(h.to_string()),
+                    None => hashing::sha256_file(path).ok().inspect(|h| {
+                        index.insert(rel, FileEntry { hash: h.clone(), size: md.len(), mtime });
+                    }),
+                };
+                hash.as_deref() == Some(e.hash.as_str())
+            }
+            _ => false,
+        };
+        if !same {
+            writes.insert(rel.clone());
+        }
+    }
+    let removes = local.keys().filter(|k| !m.files.contains_key(*k)).cloned().collect();
+    index.save(index_path)?;
+    Ok((writes, removes))
 }
 
 /// Troca as partes sincronizadas de `target` pelas da montagem.

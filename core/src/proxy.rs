@@ -4,11 +4,15 @@
 //! `localhost`. O proxy lê o handshake do protocolo do jogo e decide:
 //! - **alguém hospeda neste PC** → encaminha para o servidor local;
 //! - **um amigo hospeda** → encaminha pelo túnel P2P (iroh) até o PC dele;
-//! - **ninguém hospeda** → responde a lista de servidores com um MOTD explicando o estado e,
-//!   se for uma tentativa de entrar, acorda o mundo neste PC e pede para entrar de novo.
+//! - **ninguém hospeda / host trocando / mundo abrindo** → a lista de servidores mostra um MOTD
+//!   com o estado; quem tenta entrar fica na **sala de espera**: o proxy segura o login (o jogo
+//!   mostra "Entrando...") mandando consultas de login que o cliente responde sozinho, e liga
+//!   ao servidor assim que ele existir. Ninguém precisa sair e entrar de novo.
 //!
 //! Como o endereço nunca muda, o host pode trocar sem o jogador mexer em nada, e nenhuma
-//! porta é aberta no roteador nem na rede local (o proxy só escuta em 127.0.0.1).
+//! porta é aberta no roteador nem na rede local (o proxy só escuta em 127.0.0.1). Na troca
+//! planejada, o host antigo usa o comando `/transfer` do jogo para mandar cada jogador de volta
+//! ao próprio proxy, que o segura até o novo host abrir.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,20 +34,25 @@ pub enum Route {
     Local(u16),
     /// Um amigo hospeda.
     Remote(EndpointAddr),
-    /// Ninguém (ou trocando de host). `motd` aparece na lista de servidores; `message` é o
-    /// aviso ao tentar entrar; `wake` = uma tentativa de entrar acorda o mundo neste PC.
+    /// Sala de espera: o mundo vai abrir (aqui ou num amigo). Quem tenta entrar fica em
+    /// "Entrando..." até a rota mudar. `wake` = essa tentativa acorda o mundo neste PC.
+    Hold { motd: String, wake: bool },
+    /// Não dá para entrar agora (sem internet, manutenção). `message` é o aviso ao tentar.
     Waiting { motd: String, message: String, wake: bool },
 }
 
 impl Route {
     pub fn idle() -> Self {
-        Route::Waiting {
-            motd: "§aMundo livre §7— entre para acordar o mundo".into(),
-            message: "Acordando o mundo no seu PC...\n\nEntre de novo em alguns segundos.".into(),
-            wake: true,
-        }
+        Route::Hold { motd: "§aMundo livre §7— entre para acordar o mundo".into(), wake: true }
     }
 }
+
+/// Quanto tempo a sala de espera segura alguém antes de desistir.
+const HOLD_MAX: Duration = Duration::from_secs(300);
+/// Intervalo das consultas que mantêm o cliente vivo na sala de espera (o jogo desiste com 30 s
+/// sem receber nada).
+const HOLD_PING: Duration = Duration::from_secs(4);
+const HOLD_CHANNEL: &str = "pauletor3:espera";
 
 pub type WakeFn = Arc<dyn Fn() + Send + Sync>;
 /// Chamado quando o túnel até o host falha (o host pode ter caído).
@@ -98,7 +107,7 @@ pub async fn start(port: u16, node: Option<Arc<Node>>, on_wake: WakeFn, on_unrea
         loop {
             let Ok((sock, _)) = listener.accept().await else { continue };
             let _ = sock.set_nodelay(true);
-            let r = rx.borrow().clone();
+            let r = rx.clone();
             let node = node.clone();
             let wake = on_wake.clone();
             let unreachable = on_unreachable.clone();
@@ -122,7 +131,7 @@ impl Drop for PlayingGuard {
 
 async fn handle(
     mut sock: TcpStream,
-    route: Route,
+    mut route: watch::Receiver<Route>,
     node: Option<Arc<Node>>,
     wake: WakeFn,
     unreachable: HostUnreachableFn,
@@ -131,43 +140,171 @@ async fn handle(
     let (raw, hs) = tokio::time::timeout(Duration::from_secs(10), read_handshake(&mut sock))
         .await
         .context("handshake demorou")??;
-    let _guard = if hs.next_state != 1 {
-        playing.fetch_add(1, Ordering::SeqCst);
-        Some(PlayingGuard(playing.clone()))
-    } else {
-        None
-    };
+    if hs.next_state == 1 {
+        let r = route.borrow().clone();
+        return status(sock, raw, &hs, r, node).await;
+    }
+    playing.fetch_add(1, Ordering::SeqCst);
+    let _guard = PlayingGuard(playing.clone());
+
+    // Login: o primeiro pacote é o "Login Start" (nick). Guardamos para repassar ao servidor
+    // quando ele existir; a conexão chega lá como um login normal (mesmo se veio de /transfer).
+    let login = tokio::time::timeout(Duration::from_secs(10), read_raw_packet(&mut sock))
+        .await
+        .context("login demorou")??;
+    let mut upstream_hello = hs.encode(2);
+    upstream_hello.extend_from_slice(&login);
+
+    let deadline = tokio::time::Instant::now() + HOLD_MAX;
+    let mut woke = false;
+    let mut ka = KeepAlive::new();
+    loop {
+        let r = route.borrow_and_update().clone();
+        match r {
+            Route::Local(port) => {
+                if let Ok(mut up) = TcpStream::connect(("127.0.0.1", port)).await {
+                    let _ = up.set_nodelay(true);
+                    up.write_all(&upstream_hello).await?;
+                    let _ = tokio::io::copy_bidirectional(&mut sock, &mut up).await;
+                    return Ok(());
+                }
+            }
+            Route::Remote(addr) => {
+                let Some(node) = node.clone() else { bail!("sem rede P2P") };
+                // Abre o túnel e espera o host dizer que o servidor está de pé, mantendo o
+                // jogo vivo enquanto isso (o host pode estar acabando de assumir).
+                let opened = keep_alive_while(&mut sock, &mut ka, async {
+                    let (send, mut recv) = node.open_game_stream(&addr).await?;
+                    tokio::time::timeout(HOLD_MAX, crate::p2p::wait_game_ready(&mut recv))
+                        .await
+                        .context("o host não abriu")??;
+                    anyhow::Ok((send, recv))
+                })
+                .await?;
+                match opened {
+                    Ok((mut send, recv)) => {
+                        send.write_all(&upstream_hello).await?;
+                        let mut quic = tokio::io::join(recv, send);
+                        let _ = tokio::io::copy_bidirectional(&mut sock, &mut quic).await;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "não consegui abrir o túnel até o host");
+                        unreachable();
+                    }
+                }
+            }
+            Route::Hold { wake: do_wake, .. } => {
+                if do_wake && !woke {
+                    woke = true;
+                    wake();
+                }
+            }
+            Route::Waiting { message, wake: do_wake, .. } => {
+                if do_wake {
+                    wake();
+                }
+                return disconnect(&mut sock, &message).await;
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return disconnect(&mut sock, "O mundo demorou demais para abrir.\n\nVeja o app pAuletOr 3 e tente de novo.").await;
+        }
+        // espera a rota mudar (ou tenta de novo em alguns segundos), sem deixar o jogo desistir
+        keep_alive_while(&mut sock, &mut ka, async {
+            let _ = tokio::time::timeout(Duration::from_secs(3), route.changed()).await;
+        })
+        .await?;
+    }
+}
+
+/// Lista de servidores: mostra o MOTD do servidor de verdade quando ele existe.
+async fn status(mut sock: TcpStream, raw: Vec<u8>, hs: &Handshake, route: Route, node: Option<Arc<Node>>) -> anyhow::Result<()> {
     match route {
         Route::Local(port) => {
-            let mut up = TcpStream::connect(("127.0.0.1", port)).await.context("servidor local não respondeu")?;
-            let _ = up.set_nodelay(true);
-            up.write_all(&raw).await?;
-            let _ = tokio::io::copy_bidirectional(&mut sock, &mut up).await;
+            if let Ok(mut up) = TcpStream::connect(("127.0.0.1", port)).await {
+                up.write_all(&raw).await?;
+                let _ = tokio::io::copy_bidirectional(&mut sock, &mut up).await;
+                return Ok(());
+            }
+            reply_status(&mut sock, hs, "§eO mundo está abrindo §7— pode entrar e esperar").await
         }
         Route::Remote(addr) => {
             let Some(node) = node else { bail!("sem rede P2P") };
-            match node.open_game_stream(&addr).await {
-                Ok((mut send, recv)) => {
+            let opened = tokio::time::timeout(Duration::from_secs(4), async {
+                let (send, mut recv) = node.open_game_stream(&addr).await?;
+                crate::p2p::wait_game_ready(&mut recv).await?;
+                anyhow::Ok((send, recv))
+            })
+            .await;
+            match opened {
+                Ok(Ok((mut send, recv))) => {
                     send.write_all(&raw).await?;
                     let mut quic = tokio::io::join(recv, send);
                     let _ = tokio::io::copy_bidirectional(&mut sock, &mut quic).await;
+                    Ok(())
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "não consegui abrir o túnel até o host");
-                    unreachable();
-                    let motd = "§eNão consegui falar com o host §7— tentando de novo".to_string();
-                    reply_waiting(&mut sock, &hs, &motd, "Não consegui falar com o PC de quem está hospedando.\n\nO app está tentando de novo; se ele caiu, outro amigo assume.").await?;
-                }
+                _ => reply_status(&mut sock, hs, "§eO mundo está abrindo §7— pode entrar e esperar").await,
             }
         }
-        Route::Waiting { motd, message, wake: do_wake } => {
-            if hs.next_state != 1 && do_wake {
-                wake();
+        Route::Hold { motd, .. } | Route::Waiting { motd, .. } => reply_status(&mut sock, hs, &motd).await,
+    }
+}
+
+/// Estado das consultas da sala de espera (o relógio vale entre várias esperas seguidas).
+struct KeepAlive {
+    qid: i32,
+    next: tokio::time::Instant,
+}
+
+impl KeepAlive {
+    fn new() -> Self {
+        Self { qid: 0x5033_0000, next: tokio::time::Instant::now() + HOLD_PING }
+    }
+}
+
+/// Roda `fut` mantendo o cliente vivo com consultas de login a cada [`HOLD_PING`]. Cada
+/// consulta termina (resposta lida) antes de devolver: o servidor nunca recebe resposta de
+/// pergunta que não fez.
+async fn keep_alive_while<T>(sock: &mut TcpStream, ka: &mut KeepAlive, fut: impl std::future::Future<Output = T>) -> anyhow::Result<T> {
+    tokio::pin!(fut);
+    loop {
+        tokio::select! {
+            biased;
+            r = &mut fut => return Ok(r),
+            _ = tokio::time::sleep_until(ka.next) => {
+                ka.qid += 1;
+                ka.next = tokio::time::Instant::now() + HOLD_PING;
+                let mut body = Vec::new();
+                write_varint(&mut body, ka.qid);
+                write_string(&mut body, HOLD_CHANNEL);
+                sock.write_all(&packet(0x04, &body)).await.context("o jogo saiu da sala de espera")?;
+                sock.flush().await?;
+                let answer = tokio::time::timeout(Duration::from_secs(20), read_raw_packet(sock))
+                    .await
+                    .context("o jogo parou de responder")??;
+                let mut pos = 0;
+                parse_varint(&answer, &mut pos)?; // tamanho
+                let id = parse_varint(&answer, &mut pos)?;
+                if id != 0x02 {
+                    bail!("pacote inesperado na sala de espera ({id:#x})");
+                }
             }
-            reply_waiting(&mut sock, &hs, &motd, &message).await?;
         }
     }
-    Ok(())
+}
+
+/// Lê um pacote inteiro (tamanho + corpo) e devolve os bytes crus.
+async fn read_raw_packet<R: AsyncReadExt + Unpin>(r: &mut R) -> anyhow::Result<Vec<u8>> {
+    let mut raw = Vec::new();
+    let len = read_varint(r, &mut raw).await?;
+    if !(1..=1 << 20).contains(&len) {
+        bail!("pacote com tamanho estranho ({len})");
+    }
+    let start = raw.len();
+    raw.resize(start + len as usize, 0);
+    r.read_exact(&mut raw[start..]).await?;
+    Ok(raw)
 }
 
 // ------------------------------------------------------------------ protocolo do jogo
@@ -261,6 +398,18 @@ pub async fn read_handshake<R: AsyncReadExt + Unpin>(r: &mut R) -> anyhow::Resul
     Ok((raw, Handshake { protocol, address, port, next_state }))
 }
 
+impl Handshake {
+    /// Pacote de handshake com outro `next_state` (uma entrada por /transfer vira login normal).
+    pub fn encode(&self, next_state: i32) -> Vec<u8> {
+        let mut b = Vec::new();
+        write_varint(&mut b, self.protocol);
+        write_string(&mut b, &self.address);
+        b.extend_from_slice(&self.port.to_be_bytes());
+        write_varint(&mut b, next_state);
+        packet(0x00, &b)
+    }
+}
+
 fn status_json(protocol: i32, motd: &str) -> String {
     serde_json::json!({
         "version": { "name": "pAuletOr 3", "protocol": protocol },
@@ -270,32 +419,31 @@ fn status_json(protocol: i32, motd: &str) -> String {
     .to_string()
 }
 
-async fn reply_waiting(sock: &mut TcpStream, hs: &Handshake, motd: &str, message: &str) -> anyhow::Result<()> {
-    match hs.next_state {
-        1 => {
-            // status request (0x00) → resposta; depois ping (0x01) → pong
-            let mut tmp = Vec::new();
-            let len = read_varint(sock, &mut tmp).await?;
-            let mut body = vec![0u8; len.clamp(0, 64) as usize];
-            sock.read_exact(&mut body).await?;
-            let mut out = Vec::new();
-            write_string(&mut out, &status_json(hs.protocol, motd));
-            sock.write_all(&packet(0x00, &out)).await?;
-            let mut tmp = Vec::new();
-            if let Ok(Ok(len)) = tokio::time::timeout(Duration::from_secs(5), read_varint(sock, &mut tmp)).await {
-                let mut body = vec![0u8; len.clamp(0, 64) as usize];
-                sock.read_exact(&mut body).await?;
-                // body = id 0x01 + i64; devolve igual
-                sock.write_all(&packet(0x01, body.get(1..).unwrap_or_default())).await?;
-            }
-        }
-        _ => {
-            // login: "Disconnect (login)" (0x00) com componente de texto em JSON
-            let mut out = Vec::new();
-            write_string(&mut out, &serde_json::json!({ "text": message }).to_string());
-            sock.write_all(&packet(0x00, &out)).await?;
-        }
+async fn reply_status(sock: &mut TcpStream, hs: &Handshake, motd: &str) -> anyhow::Result<()> {
+    // status request (0x00) → resposta; depois ping (0x01) → pong
+    let mut tmp = Vec::new();
+    let len = read_varint(sock, &mut tmp).await?;
+    let mut body = vec![0u8; len.clamp(0, 64) as usize];
+    sock.read_exact(&mut body).await?;
+    let mut out = Vec::new();
+    write_string(&mut out, &status_json(hs.protocol, motd));
+    sock.write_all(&packet(0x00, &out)).await?;
+    let mut tmp = Vec::new();
+    if let Ok(Ok(len)) = tokio::time::timeout(Duration::from_secs(5), read_varint(sock, &mut tmp)).await {
+        let mut body = vec![0u8; len.clamp(0, 64) as usize];
+        sock.read_exact(&mut body).await?;
+        // body = id 0x01 + i64; devolve igual
+        sock.write_all(&packet(0x01, body.get(1..).unwrap_or_default())).await?;
     }
+    sock.flush().await?;
+    Ok(())
+}
+
+/// "Disconnect (login)" (0x00) com componente de texto em JSON.
+async fn disconnect(sock: &mut TcpStream, message: &str) -> anyhow::Result<()> {
+    let mut out = Vec::new();
+    write_string(&mut out, &serde_json::json!({ "text": message }).to_string());
+    sock.write_all(&packet(0x00, &out)).await?;
     sock.flush().await?;
     Ok(())
 }
@@ -332,12 +480,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waiting_status_and_wake_on_login() {
+    async fn status_shows_motd_without_waking() {
         let woke = Arc::new(AtomicUsize::new(0));
         let w = woke.clone();
         let p = start(0, None, Arc::new(move || { w.fetch_add(1, Ordering::SeqCst); }), Arc::new(|| {})).await.unwrap();
-
-        // lista de servidores: não acorda, mostra o MOTD e responde o ping
         let mut s = TcpStream::connect(p.addr).await.unwrap();
         s.write_all(&handshake_bytes(1)).await.unwrap();
         s.write_all(&packet(0x00, &[])).await.unwrap();
@@ -350,14 +496,58 @@ mod tests {
         let (id, body) = read_packet(&mut s).await;
         assert_eq!((id, body), (1, 42i64.to_be_bytes().to_vec()));
         assert_eq!(woke.load(Ordering::SeqCst), 0);
+    }
 
-        // tentar entrar: acorda e recebe a mensagem
-        let mut s = TcpStream::connect(p.addr).await.unwrap();
-        s.write_all(&handshake_bytes(2)).await.unwrap();
-        let (id, body) = read_packet(&mut s).await;
+    /// Entrar com o mundo livre: acorda, segura o jogo em "Entrando..." (respondendo às
+    /// consultas) e liga ao servidor assim que ele abre, com o login guardado. Uma entrada por
+    /// /transfer chega ao servidor como login normal.
+    #[tokio::test]
+    async fn hold_until_server_opens() {
+        let woke = Arc::new(AtomicUsize::new(0));
+        let w = woke.clone();
+        let p = start(0, None, Arc::new(move || { w.fetch_add(1, Ordering::SeqCst); }), Arc::new(|| {})).await.unwrap();
+        let mut c = TcpStream::connect(p.addr).await.unwrap();
+        c.write_all(&handshake_bytes(3)).await.unwrap();
+        c.write_all(&packet(0x00, b"mchado")).await.unwrap();
+
+        // duas consultas respondidas (o jogo continua vivo)
+        for _ in 0..2 {
+            let (id, body) = read_packet(&mut c).await;
+            assert_eq!(id, 0x04);
+            let mut pos = 0;
+            let qid = parse_varint(&body, &mut pos).unwrap();
+            let mut ans = Vec::new();
+            write_varint(&mut ans, qid);
+            ans.push(0);
+            c.write_all(&packet(0x02, &ans)).await.unwrap();
+        }
+        assert_eq!(woke.load(Ordering::SeqCst), 1, "acordou uma vez só");
+        assert!(p.playing(), "quem espera conta como jogando (failover)");
+
+        // o servidor abre
+        let srv = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        p.set_route(Route::Local(srv.local_addr().unwrap().port()));
+        let (mut up, _) = srv.accept().await.unwrap();
+        let (_, hs) = read_handshake(&mut up).await.unwrap();
+        assert_eq!(hs.next_state, 2, "transferência vira login");
+        let (id, body) = read_packet(&mut up).await;
+        assert_eq!((id, body), (0, b"mchado".to_vec()));
+        up.write_all(b"ok").await.unwrap();
+        let mut buf = [0u8; 2];
+        c.read_exact(&mut buf).await.unwrap();
+        assert_eq!(&buf, b"ok");
+    }
+
+    #[tokio::test]
+    async fn waiting_route_tells_why() {
+        let p = start(0, None, Arc::new(|| {}), Arc::new(|| {})).await.unwrap();
+        p.set_route(Route::Waiting { motd: "x".into(), message: "Sem internet".into(), wake: false });
+        let mut c = TcpStream::connect(p.addr).await.unwrap();
+        c.write_all(&handshake_bytes(2)).await.unwrap();
+        c.write_all(&packet(0x00, b"mchado")).await.unwrap();
+        let (id, body) = read_packet(&mut c).await;
         assert_eq!(id, 0);
-        assert!(String::from_utf8_lossy(&body).contains("Acordando"));
-        assert_eq!(woke.load(Ordering::SeqCst), 1);
+        assert!(String::from_utf8_lossy(&body).contains("Sem internet"));
     }
 
     #[tokio::test]
@@ -368,13 +558,12 @@ mod tests {
         p.set_route(Route::Local(port));
         let mut c = TcpStream::connect(p.addr).await.unwrap();
         c.write_all(&handshake_bytes(2)).await.unwrap();
-        c.write_all(b"login...").await.unwrap();
+        c.write_all(&packet(0x00, b"login...")).await.unwrap();
         let (mut up, _) = srv.accept().await.unwrap();
         let (_, hs) = read_handshake(&mut up).await.unwrap();
         assert_eq!(hs.next_state, 2);
-        let mut buf = [0u8; 8];
-        up.read_exact(&mut buf).await.unwrap();
-        assert_eq!(&buf, b"login...");
+        let (id, body) = read_packet(&mut up).await;
+        assert_eq!((id, body), (0, b"login...".to_vec()));
         assert!(p.playing());
         drop(c);
         drop(up);

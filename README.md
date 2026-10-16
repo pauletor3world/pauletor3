@@ -54,7 +54,7 @@ core/          pauletor3-core: sincronização, vez de hospedar, P2P, proxy, ser
   tests/       integração (rede simulada) e contrato com o Worker
 coordinator/   coordenação (Cloudflare Worker + Durable Objects, TypeScript)
 app/           app desktop (Tauri 2 + React + TypeScript + Tailwind)
-scripts/       publicar-coordenacao.ps1, publicar-app.ps1, e2e-failover.sh
+scripts/       publicar-coordenacao.ps1, publicar-app.ps1, e2e-failover.sh, e2e-troca.sh, robo-jogador.py
 docs/          documentação
 legacy/        projeto antigo, só referência (a v1 está na tag v1-final)
 ```
@@ -77,6 +77,7 @@ Contrato Rust ↔ Worker e teste de ponta a ponta com servidor real:
 cd coordinator && npx wrangler dev --local --port 8787        # ADMIN_TOKEN em coordinator/.dev.vars
 P3_COORD_URL=http://127.0.0.1:8787 P3_ADMIN=dev-admin-local cargo test -p pauletor3-core --test contract_http
 bash scripts/e2e-failover.sh                                  # queda do host + troca automática, medida
+bash scripts/e2e-troca.sh                                     # Parar com amigo jogando: host passa sem derrubar ninguém
 ```
 
 ### Builds

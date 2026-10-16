@@ -164,6 +164,19 @@ describe("vez de hospedar e HEAD", () => {
     expect((await err(call(owner, "POST", `${w}/lease/heartbeat`, { session_number: la.session_number, online: [], handing_over: false }))).error).toBe("lost_lock");
   });
 
+  it("passar o host: a vez fica vencida com handing_over e quem joga assume", async () => {
+    const { owner, w } = await world();
+    const { friend } = await join(owner, w, "Amigo");
+    const la = await ok<LeaseInfo>(call(owner, "POST", `${w}/lease/acquire`, acquireReq("s1")));
+    await ok(call(owner, "POST", `${w}/lease/release`, { session_number: la.session_number, handoff: true }));
+    const v = await ok<{ lease: { kind: string; previous: LeaseInfo | null } }>(call(friend, "GET", `${w}/view`));
+    expect(v.lease.kind).toBe("free");
+    expect(v.lease.previous?.handing_over).toBe(true);
+    expect(v.lease.previous?.holder).toBe(owner.id);
+    const lb = await ok<LeaseInfo>(call(friend, "POST", `${w}/lease/acquire`, acquireReq("s2", 0)));
+    expect(lb.holder).toBe(friend.id);
+  });
+
   it("corrida: 6 pedidos ao mesmo tempo, um vencedor", async () => {
     const { owner, w } = await world();
     const apps = [owner, ...(await Promise.all([1, 2, 3, 4, 5].map((i) => join(owner, w, `Amigo${i}`).then((j) => j.friend))))];

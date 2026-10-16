@@ -29,7 +29,7 @@ fn icon(kind: &str) -> Image<'static> {
 
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let play = MenuItem::with_id(app, "play", "Jogar", true, None::<&str>)?;
-    let pass = MenuItem::with_id(app, "pass", "Passar a vez", false, None::<&str>)?;
+    let pass = MenuItem::with_id(app, "pass", "Passar o host", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Abrir pAuletOr 3", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;

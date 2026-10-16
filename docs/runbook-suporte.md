@@ -3,7 +3,7 @@
 | Sintoma | Causa provável | O que fazer |
 |---|---|---|
 | “Sem conexão com a nuvem do mundo” | Internet caiu, ou relógio do Windows muito errado (assinatura recusada). | Conferir internet; acertar data/hora automática do Windows; Saúde → Tentar de novo. |
-| Amigo vê “Não consegui falar com o host” | Host sem internet ou caiu. | Esperar ~1 min: se ele caiu, quem está jogando assume. |
+| Amigo fica em “Entrando...” | O mundo está abrindo ou trocando de host (sala de espera do proxy). | Esperar: entra sozinho. Depois de 5 min o proxy desiste e mostra o motivo. |
 | Saúde mostra “conexão relay” | NAT/CGNAT impede conexão direta. | Funciona, com ping maior. Reiniciar o roteador às vezes resolve. |
 | “A porta 25565 já está em uso” | Outro servidor de Minecraft aberto no PC. | Fechar o outro servidor, ou Configurações → Porta no Minecraft (ex.: 25570) e reiniciar o app. |
 | Amigo “aguardando aprovação” | Convite com aprovação. | Dono: Mundo e turma → Pedidos para entrar → Aprovar. |

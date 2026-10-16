@@ -224,8 +224,8 @@ pub mod msg {
     pub fn handing_over(host: &str) -> Entry {
         Entry::new(
             Category::Session,
-            "🔁 Passando a vez",
-            format!("**{}** precisou sair. O mundo está sendo salvo; quem quiser continuar pode assumir.", esc(host)),
+            "🔁 Passando o host",
+            format!("**{}** precisou sair. O host passa para quem está jogando, sem ninguém cair.", esc(host)),
             color::HANDOVER,
         )
     }

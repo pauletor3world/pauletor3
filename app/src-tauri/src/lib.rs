@@ -173,6 +173,8 @@ pub fn quit(app: &AppHandle) {
                 show_main(&app2);
                 let _ = app2.emit("p3://quitting", ());
                 let _ = engine.stop(EndReason::UserStop).await;
+                // passou o host para um amigo: ele pega a versão final daqui, por P2P
+                engine.wait_successor(std::time::Duration::from_secs(90)).await;
             }
         }
         app2.exit(0);

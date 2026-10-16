@@ -44,7 +44,6 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   useTick(10000);
   const { busy, error, setError, run } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
-  const [confirmPass, setConfirmPass] = useState(false);
 
   if (!status) {
     return (
@@ -65,6 +64,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   const online = status.me_hosting ? status.online : held?.online ?? [];
   const host = status.me_hosting ? status.player_name : held?.purpose === "hosting" ? held.player : undefined;
   const replicaOk = status.head_seq == null || status.replica_seq >= status.head_seq;
+  const friendsOn = status.me_hosting ? status.online.filter((n) => n !== status.player_name) : [];
 
   const copyAddress = async () => {
     await writeText(status.address);
@@ -76,7 +76,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   if (status.recovery_pending && status.phase === "idle") {
     main = { label: "Recuperar sessão", sub: "Enviar o que ficou neste PC", icon: <LifeBuoy className="size-6" />, variant: "sun", onClick: () => run("recover", api.recover) };
   } else if (status.failover) {
-    main = { label: "Trocando de host…", sub: "Não feche o jogo", icon: <RefreshCw className="size-6 animate-spin" />, variant: "secondary", disabled: true };
+    main = { label: "Trocando de host…", sub: "Fique no jogo: você volta sozinho", icon: <RefreshCw className="size-6 animate-spin" />, variant: "secondary", disabled: true };
   } else if (working) {
     main = { label: phaseLabel[status.phase], sub: "Aguarde…", icon: <Sparkles className="size-6" />, variant: "secondary", disabled: true };
   } else if (status.me_hosting) {
@@ -84,7 +84,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   } else if (held && held.purpose === "maintenance") {
     main = { label: "Aguarde um pouco", sub: `${held.player} está ajustando o mundo`, icon: <Clock className="size-6" />, variant: "secondary", disabled: true };
   } else if (held && held.handing_over) {
-    main = { label: "Assumir agora", sub: `${held.player} está passando a vez`, icon: <ArrowRightLeft className="size-6" />, variant: "sun", onClick: () => run("take", () => api.takeTurn(true)) };
+    main = { label: "Trocando de host…", sub: `${held.player} está passando o mundo`, icon: <ArrowRightLeft className="size-6" />, variant: "secondary", disabled: true };
   } else if (held) {
     main = { label: "Jogar", sub: `Entrar no mundo aberto por ${held.player}`, icon: <Play className="size-6 fill-current" />, variant: "primary", onClick: () => run("play", () => api.play(true)) };
   } else {
@@ -207,7 +207,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               <div className="mb-4">
                 <InfoNote tone="warn">
                   <b className="text-ink">Seus amigos ainda estão jogando.</b> Pode fechar o seu jogo: o mundo continua para eles e fecha sozinho quando o último sair. Se precisar
-                  desligar o PC, use <b className="text-ink">Passar a vez</b>.
+                  desligar o PC, clique em <b className="text-ink">Passar o host</b>: o mundo vai para um amigo sem derrubar ninguém.
                 </InfoNote>
               </div>
             )}
@@ -215,12 +215,15 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               <Button icon={<Save className="size-4" />} busy={busy === "save"} onClick={() => run("save", api.saveNow).then(() => toast({ level: "success", title: "Mundo salvo", body: "" }))}>
                 Salvar agora
               </Button>
-              <Button icon={<ArrowRightLeft className="size-4" />} onClick={() => setConfirmPass(true)}>
-                Passar a vez
-              </Button>
-              <Button variant="danger" icon={<Power className="size-4" />} onClick={() => setConfirmStop(true)}>
-                Encerrar sessão
-              </Button>
+              {friendsOn.length > 0 ? (
+                <Button variant="sun" icon={<ArrowRightLeft className="size-4" />} onClick={() => setConfirmStop(true)}>
+                  Passar o host
+                </Button>
+              ) : (
+                <Button variant="danger" icon={<Power className="size-4" />} onClick={() => setConfirmStop(true)}>
+                  Encerrar sessão
+                </Button>
+              )}
             </div>
           </div>
         </Card>
@@ -307,52 +310,28 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
       {/* ---------------------------------------------------------------- modais */}
       <Modal
         open={confirmStop}
-        title="Encerrar a sessão?"
+        title={friendsOn.length > 0 ? "Passar o host?" : "Encerrar a sessão?"}
         onClose={() => setConfirmStop(false)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setConfirmStop(false)}>
-              Continuar jogando
+              Continuar
             </Button>
             <Button
-              variant="danger"
+              variant={friendsOn.length > 0 ? "sun" : "danger"}
               onClick={() => {
                 setConfirmStop(false);
                 run("stop", api.stopSession);
               }}
             >
-              Salvar e encerrar
+              {friendsOn.length > 0 ? "Passar o host" : "Salvar e encerrar"}
             </Button>
           </>
         }
       >
-        {online.length > 0
-          ? `${online.join(", ")} ${online.length > 1 ? "estão" : "está"} online e ${online.length > 1 ? "serão desconectados" : "será desconectado"}. Se preferir que continuem, use Passar a vez.`
-          : "Ninguém está online."}{" "}
-        O mundo será salvo e guardado.
-      </Modal>
-      <Modal
-        open={confirmPass}
-        title="Passar a vez?"
-        onClose={() => setConfirmPass(false)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirmPass(false)}>
-              Cancelar
-            </Button>
-            <Button
-              variant="sun"
-              onClick={() => {
-                setConfirmPass(false);
-                run("pass", api.passTurn);
-              }}
-            >
-              Passar a vez
-            </Button>
-          </>
-        }
-      >
-        Todos recebem um aviso no chat com 30 segundos de contagem. O mundo é salvo e um amigo que estiver jogando assume sozinho — é só entrar de novo, no mesmo endereço.
+        {friendsOn.length > 0
+          ? `O mundo vai para o PC de ${friendsOn.length > 1 ? "um amigo que está jogando" : friendsOn[0]}. Ninguém precisa sair: o jogo de quem está dentro mostra "Entrando..." por alguns segundos e volta sozinho, de onde parou. Depois disso você pode desligar o PC.`
+          : "Ninguém mais está online. O mundo será salvo e guardado."}
       </Modal>
     </div>
   );

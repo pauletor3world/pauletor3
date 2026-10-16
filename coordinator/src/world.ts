@@ -10,6 +10,7 @@ import { DurableObject } from "cloudflare:workers";
 import { randomId, sha256Hex } from "./auth";
 import {
   FORMAT_VERSION,
+  LEASE_TTL_MS,
   LeaseInfo,
   LeasePurpose,
   LeaseStatus,
@@ -348,11 +349,22 @@ export class WorldDO extends DurableObject<Env> {
     return l;
   }
 
-  async release(caller: string, sessionNumber: number): Promise<{}> {
+  /**
+   * Libera a vez. Com `handoff`, a vez não some: vira "vencida agora" com `handing_over`, e quem
+   * estava jogando assume pelo caminho do failover (a réplica mais nova tem preferência).
+   */
+  async release(caller: string, sessionNumber: number, handoff = false, now = Date.now()): Promise<{}> {
     const l = this.lease;
     if (l && l.holder === caller && l.session_number === sessionNumber) {
-      this.lease = null;
-      this.setMeta("lease", null);
+      if (handoff) {
+        l.heartbeat_at = iso(now - LEASE_TTL_MS);
+        l.vouched_at = null;
+        l.handing_over = true;
+        this.saveLease(true, now);
+      } else {
+        this.lease = null;
+        this.setMeta("lease", null);
+      }
     }
     return {};
   }
@@ -391,12 +403,14 @@ export class WorldDO extends DurableObject<Env> {
       host_reachable: p.host_reachable == null ? null : Number(p.host_reachable),
       app_version: String(p.app_version ?? "").slice(0, 32),
       path: p.path ? String(p.path).slice(0, 16) : null,
+      proxy_port: Number.isInteger(p.proxy_port) && p.proxy_port! > 0 && p.proxy_port! < 65536 ? p.proxy_port : null,
     };
     this.online.set(caller, { p: clean, at: now });
     // Um membro alcança o host por P2P: a vez continua viva mesmo se o heartbeat do host
     // não chega (só a internet do host com a nuvem caiu).
     const l = this.lease;
-    if (l && clean.host_reachable != null && l.session_number === clean.host_reachable && l.holder !== caller) {
+    // Quem está passando o host não é sustentado: quem joga assume na hora.
+    if (l && !l.handing_over && clean.host_reachable != null && l.session_number === clean.host_reachable && l.holder !== caller) {
       l.vouched_at = iso(now);
       this.saveLease(false, now);
     }

@@ -32,6 +32,8 @@ export interface Presence {
   host_reachable: number | null;
   app_version: string;
   path?: string | null;
+  /** Porta do proxy local deste PC (para o /transfer na troca de host). */
+  proxy_port?: number | null;
 }
 
 export interface SeenPresence {

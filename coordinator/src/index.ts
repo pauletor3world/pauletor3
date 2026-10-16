@@ -192,8 +192,8 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
       return json(await w.heartbeat(id, b.session_number, b.online, b.handing_over));
     }
     case "POST lease/release": {
-      const b = await bodyJson<{ session_number: number }>(s.body);
-      return json(await w.release(id, b.session_number));
+      const b = await bodyJson<{ session_number: number; handoff?: boolean }>(s.body);
+      return json(await w.release(id, b.session_number, !!b.handoff));
     }
     case "GET head":
       return json(await w.head(id));

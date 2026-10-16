@@ -127,6 +127,9 @@ pub struct Presence {
     /// Tipo de conexão com o host ("direta", "relay"), para a tela de Saúde.
     #[serde(default)]
     pub path: Option<String>,
+    /// Porta do proxy local deste PC (o host manda o jogo de volta para ela na troca).
+    #[serde(default)]
+    pub proxy_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -227,8 +230,9 @@ pub trait Coordinator: Send + Sync {
     /// Mantém a vez viva. `LostLock` se ela não é mais nossa.
     async fn heartbeat(&self, session_number: u64, online: &[String], handing_over: bool) -> NmResult<LeaseInfo>;
 
-    /// Libera a vez (só depois do HEAD final).
-    async fn release(&self, session_number: u64) -> NmResult<()>;
+    /// Libera a vez (só depois do HEAD final). Com `handoff`, a vez fica "vencida agora" com
+    /// `handing_over`: quem estava jogando assume pelo caminho do failover.
+    async fn release(&self, session_number: u64, handoff: bool) -> NmResult<()>;
 
     async fn head(&self) -> NmResult<Option<Head>>;
 

@@ -142,15 +142,46 @@ async fn roundtrip_between_two_pcs() {
     // B joga: muda uma região e cria outra
     std::fs::write(b.paths.world().join("region/r.0.0.mca"), vec![7u8; 41_000]).unwrap();
     std::fs::write(b.paths.world().join("region/r.9.9.mca"), vec![8u8; 5_000]).unwrap();
+    std::fs::remove_file(b.paths.world().join("region/r.5.0.mca")).unwrap();
     let before = rb.list(layout::OBJECTS).await.unwrap().len();
     let g = b.acquire("b1", sb.replica_seq()).await.unwrap();
     let m2 = host_push(&b, &sb, &g, ManifestKind::Session, Some(&m1)).await.unwrap();
     g.release().await.unwrap();
     assert_eq!(rb.list(layout::OBJECTS).await.unwrap().len() - before, 2, "só os 2 arquivos novos foram enviados");
 
+    // A já tem o mundo: só a diferença é trocada (nada é remontado do zero)
     assert_eq!(sa.pull(quiet()).await.unwrap(), PullOutcome::Updated);
     assert_eq!(fingerprint(&a.paths.server()), fingerprint(&b.paths.server()));
+    assert!(!a.paths.world().join("region/r.5.0.mca").exists(), "arquivo apagado no outro PC some aqui");
+    assert!(a.paths.world().join("session.lock").exists(), "o resto da pasta do mundo ficou onde estava");
     assert_eq!(LocalState::load(&a.paths).current_manifest.as_deref(), Some(m2.as_str()));
+}
+
+/// Passar o host: a vez fica "vencida agora" e marcada; quem está jogando assume na hora, e a
+/// réplica mais nova tem a preferência.
+#[tokio::test]
+async fn planned_handoff_goes_to_newest_replica() {
+    let h = hub();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    let c = Pc::new(&h, "c");
+    let ga = a.acquire("sa", 3).await.unwrap();
+    b.coord.presence(&Presence { replica_seq: 3, playing: true, ..Default::default() }).await.unwrap();
+    c.coord.presence(&Presence { replica_seq: 2, playing: true, ..Default::default() }).await.unwrap();
+    assert!(matches!(c.acquire("sc", 2).await, Err(NmError::HeldBy(_))));
+
+    ga.release_handoff().await.unwrap();
+    let v = b.coord.view().await.unwrap();
+    match &v.lease {
+        pauletor3_core::coord::LeaseStatus::Free { previous: Some(p) } => {
+            assert!(p.handing_over);
+            assert_eq!(p.holder, "a");
+        }
+        other => panic!("esperava a vez livre com o host anterior: {other:?}"),
+    }
+    assert!(matches!(c.acquire("sc", 2).await, Err(NmError::NotBestCandidate { best_seq: 3 })));
+    let gb = b.acquire("sb", 3).await.unwrap();
+    assert!(gb.session_number() > ga.session_number());
 }
 
 /// Envio interrompido no meio: o HEAD não muda e o mundo oficial continua íntegro.
