@@ -77,6 +77,9 @@ enum Cmd {
         /// Simula queda de energia depois de N segundos hospedando (testes de failover).
         #[arg(long)]
         crash_after: Option<u64>,
+        /// Encerra (com segurança) N segundos depois de virar host (testes de failover).
+        #[arg(long)]
+        stop_after_hosting: Option<u64>,
     },
     /// Hospeda até a sessão acabar (atalho para `up --play`).
     Play {
@@ -100,6 +103,8 @@ enum Cmd {
     },
     /// Baixa o HEAD para a pasta local (sem hospedar).
     Pull,
+    /// Baixa e confere Java e servidor (o app faz isso no fim do assistente).
+    Prepare,
     /// Checklist de saúde.
     Health,
     /// Relatório anonimizado.
@@ -220,11 +225,11 @@ async fn main() -> anyhow::Result<()> {
             engine.set_member(&id, None, true).await.map_err(e)?;
             println!("removido");
         }
-        Cmd::Up { play, stop_after, checkpoint_after, crash_after } => {
-            run_up(&engine, play, stop_after, checkpoint_after, crash_after).await?;
+        Cmd::Up { play, stop_after, checkpoint_after, crash_after, stop_after_hosting } => {
+            run_up(&engine, play, stop_after, checkpoint_after, crash_after, stop_after_hosting).await?;
         }
         Cmd::Play { stop_after, checkpoint_after } => {
-            run_up(&engine, true, stop_after, checkpoint_after, None).await?;
+            run_up(&engine, true, stop_after, checkpoint_after, None, None).await?;
         }
         Cmd::Recover => {
             engine.recover().await.map_err(e)?;
@@ -260,6 +265,17 @@ async fn main() -> anyhow::Result<()> {
             let se = pauletor3_core::sync::SyncEngine::new(b.remote, b.coord, p.clone());
             let o = se.pull(Arc::new(|_| {})).await.map_err(e)?;
             println!("{o:?}");
+        }
+        Cmd::Prepare => {
+            let v = match engine.backend().await {
+                Ok(b) => pauletor3_core::versions::Versions::load(&*b.remote).await.map_err(e)?.unwrap_or_else(pauletor3_core::versions::Versions::builtin),
+                Err(_) => pauletor3_core::versions::Versions::builtin(),
+            };
+            let java = pauletor3_core::java::ensure_java(&p, &v, pauletor3_core::events::quiet()).await.map_err(e)?;
+            pauletor3_core::server::prepare(&p, &v, pauletor3_core::events::quiet()).await.map_err(e)?;
+            pauletor3_core::server::verify_install(&p, &v).map_err(e)?;
+            pauletor3_core::server::warm_up(&p, &java).await.map_err(e)?;
+            println!("Java e servidor prontos");
         }
         Cmd::Health => {
             let _ = engine.refresh().await;
@@ -335,7 +351,14 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// Fica online como o app. Imprime mudanças de estado (para os testes de ponta a ponta lerem).
-async fn run_up(engine: &Arc<Engine>, play: bool, stop_after: Option<u64>, checkpoint_after: Option<u64>, crash_after: Option<u64>) -> anyhow::Result<()> {
+async fn run_up(
+    engine: &Arc<Engine>,
+    play: bool,
+    stop_after: Option<u64>,
+    checkpoint_after: Option<u64>,
+    crash_after: Option<u64>,
+    stop_after_hosting: Option<u64>,
+) -> anyhow::Result<()> {
     engine.start_network().await.map_err(e)?;
     let _ = engine.refresh().await;
     if let Some(a) = engine.proxy_addr().await {
@@ -348,6 +371,7 @@ async fn run_up(engine: &Arc<Engine>, play: bool, stop_after: Option<u64>, check
     let started = tokio::time::Instant::now();
     let mut checkpointed = false;
     let mut last_line = String::new();
+    let mut hosting_since: Option<tokio::time::Instant> = None;
     loop {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(1)) => {}
@@ -370,8 +394,18 @@ async fn run_up(engine: &Arc<Engine>, play: bool, stop_after: Option<u64>, check
             st.failover.clone().unwrap_or_default()
         );
         if line != last_line {
-            println!("[{:>5}s] {line}", started.elapsed().as_secs());
+            let epoch = chrono::Utc::now().timestamp_millis();
+            println!("[{:>5}s] [t={epoch}] {line}", started.elapsed().as_secs());
             last_line = line;
+        }
+        if st.me_hosting && hosting_since.is_none() {
+            hosting_since = Some(tokio::time::Instant::now());
+        }
+        if let (Some(s), Some(since)) = (stop_after_hosting, hosting_since) {
+            if since.elapsed() >= Duration::from_secs(s) {
+                engine.stop(EndReason::UserStop).await.map_err(e)?;
+                break;
+            }
         }
         if let Some(s) = checkpoint_after {
             if !checkpointed && st.me_hosting && started.elapsed() >= Duration::from_secs(s) {
@@ -384,7 +418,7 @@ async fn run_up(engine: &Arc<Engine>, play: bool, stop_after: Option<u64>, check
         }
         if let Some(s) = crash_after {
             if st.me_hosting && started.elapsed() >= Duration::from_secs(s) {
-                println!("SIMULANDO QUEDA DE ENERGIA");
+                println!("SIMULANDO QUEDA DE ENERGIA t={}", chrono::Utc::now().timestamp_millis());
                 engine.simulate_crash().await;
                 std::process::exit(9);
             }

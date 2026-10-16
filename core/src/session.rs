@@ -365,6 +365,19 @@ impl Engine {
         Ok(Backend { coord, remote })
     }
 
+    /// Endereço das atualizações do app no Worker do dono, com os cabeçalhos assinados.
+    pub async fn updater_endpoint(&self) -> NmResult<(String, Vec<(&'static str, String)>)> {
+        let cfg = self.config.read().await;
+        let (Some(url), Some(world)) = (cfg.coordinator_url.clone(), cfg.world_id.clone()) else {
+            return Err(NmError::NotConfigured("este PC ainda não entrou em nenhum mundo".into()));
+        };
+        drop(cfg);
+        let id = self.secrets.read().await.identity().ok_or_else(|| NmError::NotConfigured("identidade ausente".into()))?;
+        let api = ApiClient::new(&url, &world, id)?;
+        let headers = api.auth_headers(&format!("/u/{world}")).to_vec();
+        Ok((format!("{}/u/{world}/latest.json", url.trim_end_matches('/')), headers))
+    }
+
     async fn sync_engine(&self) -> NmResult<SyncEngine> {
         let b = self.backend().await?;
         let peers = self.peer_source(true).await;
@@ -854,10 +867,10 @@ impl Engine {
         let me_hosting = self.session.lock().await.is_some();
         let prev = self.view.read().await.clone();
         let cfg = self.config.read().await.clone();
-        if !me_hosting && cfg.notify_toasts {
-            self.toast_changes(prev.as_ref().map(|v| &v.lease), &view.lease, &cfg);
-        }
         let me = b.coord.me();
+        if !me_hosting && cfg.notify_toasts {
+            self.toast_changes(prev.as_ref().map(|v| &v.lease), &view.lease, &cfg, &me);
+        }
         let host = view.lease.held().map(|l| l.holder.clone());
         let members: Vec<MemberView> = view
             .members
@@ -910,8 +923,12 @@ impl Engine {
         Ok(())
     }
 
-    fn toast_changes(&self, prev: Option<&LeaseStatus>, now: &LeaseStatus, cfg: &Config) {
+    fn toast_changes(&self, prev: Option<&LeaseStatus>, now: &LeaseStatus, cfg: &Config, me: &str) {
         let Some(prev) = prev else { return };
+        // o que este próprio PC fez já tem aviso próprio
+        if now.held().map(|l| l.holder == me).unwrap_or(false) {
+            return;
+        }
         match (prev, now) {
             (LeaseStatus::Free { .. }, LeaseStatus::Held { lease }) if lease.purpose == LeasePurpose::Hosting => {
                 self.notice(NoticeLevel::Info, &format!("{} abriu o mundo", lease.player), "Clique em Jogar para entrar.")

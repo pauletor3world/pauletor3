@@ -255,3 +255,42 @@ describe("nuvem do mundo", () => {
     expect((await err(call(owner, "GET", `${w}/blob/objects/naoehash`))).error).toBe("bad_path");
   });
 });
+
+describe("distribuição do app pelo Worker", () => {
+  it("instalador só com convite válido; atualização só para membros", async () => {
+    const { owner, w, world_id } = await world();
+    const exe = new Uint8Array(3_000_000).fill(77);
+    const put = await worker.fetch(
+      new Request(`${BASE}/v1/app/installer`, {
+        method: "PUT",
+        headers: { "x-p3-admin": "admin-de-teste", "x-p3-version": "2.0.0", "x-p3-updater-signature": "c2ln", "content-length": String(exe.length) },
+        body: exe,
+      }),
+    );
+    expect(put.status).toBe(200);
+    const inv = await ok(call(owner, "POST", `${w}/invites`, { hours: 1, uses: 1 }));
+    const page = await (await worker.fetch(new Request(`${BASE}/c/${inv.token}`))).text();
+    expect(page).toContain(`/d/${inv.token}`);
+    const dl = await worker.fetch(new Request(`${BASE}/d/${inv.token}`));
+    expect(dl.status).toBe(200);
+    expect(dl.headers.get("content-disposition")).toContain("pAuletOr3-2.0.0-setup.exe");
+    expect((await dl.arrayBuffer()).byteLength).toBe(exe.length);
+    expect((await worker.fetch(new Request(`${BASE}/d/${world_id}.naovalenada`))).status).toBe(403);
+
+    // updater: assinatura sobre o prefixo /u/:mundo
+    const signed = async (who: Who, path: string) => {
+      const ts = Date.now();
+      const msg = `p3v1\nGET\n/u/${world_id}\n${ts}\n-`;
+      const sig = await crypto.subtle.sign({ name: "Ed25519" }, who.key, new TextEncoder().encode(msg));
+      return worker.fetch(new Request(`${BASE}${path}`, { headers: { "x-p3-id": who.id, "x-p3-ts": String(ts), "x-p3-sig": bytesToHex(sig) } }));
+    };
+    const latest = await signed(owner, `/u/${world_id}/latest.json`);
+    expect(latest.status).toBe(200);
+    const j = (await latest.json()) as any;
+    expect(j.version).toBe("2.0.0");
+    expect(j.platforms["windows-x86_64"].url).toBe(`${BASE}/u/${world_id}/installer`);
+    expect((await signed(owner, `/u/${world_id}/installer`)).status).toBe(200);
+    const stranger = await newApp();
+    expect((await signed(stranger, `/u/${world_id}/latest.json`)).status).toBe(403);
+  });
+});

@@ -1,6 +1,4 @@
 import { listen } from "@tauri-apps/api/event";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Download, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Sidebar, TitleBar, Toasts, type Page } from "./components/Chrome";
@@ -21,7 +19,7 @@ import World from "./pages/World";
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [page, setPage] = useState<Page>("home");
-  const [update, setUpdate] = useState<Update | null>(null);
+  const [update, setUpdate] = useState<{ version: string } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [quitting, setQuitting] = useState(false);
   const [healthBad, setHealthBad] = useState(false);
@@ -38,16 +36,18 @@ export default function App() {
     };
   }, [loadInfo]);
 
-  // Atualização automática: confere ao abrir e a cada 6 horas.
+  // Atualização: vem do Worker do dono (só para membros). Confere ao abrir e a cada 6 horas.
   useEffect(() => {
+    if (!info?.configured) return;
     const look = () =>
-      check()
+      api
+        .updateCheck()
         .then((u) => u && setUpdate(u))
         .catch(() => {});
     look();
     const t = window.setInterval(look, 6 * 3600 * 1000);
     return () => window.clearInterval(t);
-  }, []);
+  }, [info?.configured]);
 
   useEffect(() => {
     if (!info?.configured) return;
@@ -69,8 +69,7 @@ export default function App() {
     }
     setUpdating(true);
     try {
-      await update.downloadAndInstall();
-      await relaunch();
+      await api.updateInstall();
     } catch (e) {
       setUpdating(false);
       push({ level: "error", title: "A atualização falhou", body: String(e) });

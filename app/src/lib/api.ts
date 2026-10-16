@@ -81,6 +81,8 @@ export const api = {
     ),
   journalStatus: () => invoke<JournalStatus>("journal_status"),
   testWebhook: (url?: string) => invoke<void>("test_webhook", { url }),
+  updateCheck: () => invoke<{ version: string; notes: string | null } | null>("update_check"),
+  updateInstall: () => invoke<void>("update_install"),
   quit: () => invoke<void>("quit_app"),
   hideWindow: () => invoke<void>("hide_window"),
 

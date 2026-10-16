@@ -32,6 +32,8 @@ const MC_TUNNEL_V1: u8 = 1;
 const MAX_REQUEST: u32 = 4096;
 /// Pedidos de objetos em paralelo para um mesmo amigo.
 const PARALLEL: usize = 8;
+/// Ping que não volta neste tempo = amigo indisponível (o relay mais distante fica bem abaixo).
+const PING_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetMode {
@@ -187,15 +189,44 @@ impl Node {
         Ok((send, recv))
     }
 
-    /// Ida e volta até um amigo (também confirma que ele está vivo).
+    /// Ida e volta até um amigo (também confirma que ele está vivo). Responde em segundos
+    /// mesmo se o amigo morreu: uma conexão que não responde é descartada (a próxima tentativa
+    /// reconecta), em vez de esperar o tempo de inatividade do QUIC.
     pub async fn ping(&self, peer: &EndpointAddr) -> anyhow::Result<Duration> {
         let t = std::time::Instant::now();
-        let conn = self.connection(peer, ALPN_SYNC).await?;
-        let (status, _) = request(&conn, &SyncRequest::Ping).await?;
-        if status != STATUS_OK {
-            bail!("ping recusado");
+        let r = tokio::time::timeout(PING_TIMEOUT, async {
+            let conn = self.connection(peer, ALPN_SYNC).await?;
+            let (status, _) = request(&conn, &SyncRequest::Ping).await?;
+            if status != STATUS_OK {
+                bail!("ping recusado");
+            }
+            Ok(())
+        })
+        .await;
+        match r {
+            Ok(Ok(())) => Ok(t.elapsed()),
+            Ok(Err(e)) => {
+                self.forget(&peer.id).await;
+                Err(e)
+            }
+            Err(_) => {
+                self.forget(&peer.id).await;
+                bail!("o amigo não respondeu em {PING_TIMEOUT:?}")
+            }
         }
-        Ok(t.elapsed())
+    }
+
+    /// Esquece conexões guardadas com um amigo (ele pode ter caído).
+    pub async fn forget(&self, peer: &EndpointId) {
+        let mut conns = self.conns.lock().await;
+        conns.retain(|(id, _), c| {
+            if id == peer {
+                c.close(0u32.into(), b"sem resposta");
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// "direta" ou "relay" para a conexão de jogo/sync com um amigo, se houver.

@@ -119,6 +119,34 @@ pub fn escape_prop(v: &str) -> String {
     out
 }
 
+/// Aquece o servidor sem abrir mundo: o launcher do Fabric baixa as bibliotecas na primeira
+/// execução (até 1 min) e o `--initSettings` do Minecraft sai logo depois de carregar. Assim o
+/// primeiro "Jogar" (e uma troca de host) não esperam esse download. Idempotente.
+pub async fn warm_up(paths: &Paths, java: &Path) -> NmResult<()> {
+    let marker = paths.server().join(".fabric").join("aquecido");
+    if marker.exists() {
+        return Ok(());
+    }
+    let mut c = crate::util::command(java);
+    c.arg("-jar").arg(LAUNCHER_JAR).arg("--initSettings").arg("nogui").current_dir(paths.server()).stdout(Stdio::null()).stderr(Stdio::null()).stdin(Stdio::null());
+    let mut child = c.spawn().map_err(|e| NmError::Other(anyhow::anyhow!("não consegui iniciar o Java: {e}")))?;
+    match tokio::time::timeout(Duration::from_secs(600), child.wait()).await {
+        Ok(Ok(st)) if st.success() => {
+            if let Some(p) = marker.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            std::fs::write(&marker, b"ok")?;
+            Ok(())
+        }
+        Ok(Ok(st)) => Err(NmError::Other(anyhow::anyhow!("o aquecimento do servidor terminou com {st}"))),
+        Ok(Err(e)) => Err(NmError::Other(e.into())),
+        Err(_) => {
+            let _ = child.kill().await;
+            Err(NmError::Other(anyhow::anyhow!("o aquecimento do servidor demorou demais")))
+        }
+    }
+}
+
 /// Quem pode entrar (gerado a partir dos membros aprovados do mundo).
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 pub struct WhitelistEntry {

@@ -24,7 +24,7 @@ impl Default for LeaseConfig {
         Self {
             heartbeat_every: Duration::from_secs(rules::HEARTBEAT_SECS),
             // um pouco antes da expiração, para dar tempo de reagir
-            isolated_after: Duration::from_secs((rules::LEASE_TTL_SECS - 10) as u64),
+            isolated_after: Duration::from_secs((rules::LEASE_TTL_SECS - 5) as u64),
         }
     }
 }

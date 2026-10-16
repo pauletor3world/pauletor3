@@ -79,6 +79,14 @@ impl ApiClient {
         crate::p2p::sign(&self.secret, msg.as_bytes())
     }
 
+    /// Cabeçalhos de autenticação para um GET em `path` sem corpo (usado pelo updater, que
+    /// assina o prefixo `/u/:mundo` e repete os cabeçalhos no JSON e no download).
+    pub fn auth_headers(&self, path: &str) -> [(&'static str, String); 3] {
+        let ts = chrono::Utc::now().timestamp_millis() as u64;
+        let sig = self.sign("GET", path, ts, "-");
+        [("x-p3-id", self.id.clone()), ("x-p3-ts", ts.to_string()), ("x-p3-sig", sig)]
+    }
+
     /// Faz um pedido assinado. `path` inclui a query.
     pub async fn send(&self, method: reqwest::Method, path: &str, body: Body<'_>, extra: &[(&str, &str)]) -> NmResult<reqwest::Response> {
         let ts = chrono::Utc::now().timestamp_millis() as u64;

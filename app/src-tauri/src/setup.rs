@@ -174,9 +174,10 @@ pub async fn prepare_runtime_inner(e: &Arc<Engine>) -> CmdResult<()> {
         Ok(b) => Versions::load(&*b.remote).await?.unwrap_or_else(Versions::builtin),
         Err(_) => Versions::builtin(),
     };
-    java::ensure_java(&e.paths, &v, quiet()).await?;
+    let java = java::ensure_java(&e.paths, &v, quiet()).await?;
     server::prepare(&e.paths, &v, quiet()).await?;
     server::verify_install(&e.paths, &v)?;
+    server::warm_up(&e.paths, &java).await?;
     Ok(())
 }
 

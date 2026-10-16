@@ -6,6 +6,7 @@
 // POST /v1/join/:token                          entra por convite
 // *    /v1/worlds/:w/...                        operações do mundo (só membros)
 
+import { downloadForInvite, publishInstaller, updater } from "./app-dist";
 import { AuthError, randomId, safeEqual, verifyRequest } from "./auth";
 import { blobStore } from "./blobs";
 import { invitePage } from "./invite-page";
@@ -82,15 +83,32 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   let m = /^\/c\/([a-z0-9]{6,32})\.([a-z0-9]{8,64})$/.exec(p);
   if (m && req.method === "GET") {
     const info = await worldStub(env, m[1]).inviteInfo(m[2]).catch(() => ({ valid: false, name: "", owner_nick: "" }));
-    return new Response(invitePage(info, env.DOWNLOAD_URL ?? ""), {
+    return new Response(invitePage(info, `/d/${m[1]}.${m[2]}`), {
       headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer" },
     });
   }
 
+  // instalador para quem tem convite
+  m = /^\/d\/([a-z0-9]{6,32})\.([a-z0-9]{8,64})$/.exec(p);
+  if (m && req.method === "GET") {
+    const info = await worldStub(env, m[1]).inviteInfo(m[2]).catch(() => ({ valid: false }));
+    return downloadForInvite(env, !!info.valid);
+  }
+
+  // atualizações do app (só membros)
+  m = /^\/u\/([a-z0-9]{6,32})\/(latest\.json|installer)$/.exec(p);
+  if (m && req.method === "GET") {
+    const w = worldStub(env, m[1]);
+    return updater(req, env, url, m[1], m[2], (id) => w.checkMember(id));
+  }
+
+  // o dono publica uma versão do app
+  if (p === "/v1/app/installer" && req.method === "PUT") return publishInstaller(req, env);
+
   // criar mundo
   if (p === "/v1/worlds" && req.method === "POST") {
     const admin = req.headers.get("x-p3-admin") ?? "";
-    if (!env.ADMIN_TOKEN || !safeEqual(admin, env.ADMIN_TOKEN)) throw new ApiError(403, "forbidden", "chave de administração inválida");
+    if (!env.ADMIN_TOKEN || !safeEqual(admin.trim(), env.ADMIN_TOKEN.trim())) throw new ApiError(403, "forbidden", "chave de administração inválida");
     const s = await verifyRequest(req, url, true);
     const b = await bodyJson<{ name: string; nick: string }>(s.body);
     const worldId = randomId(12);

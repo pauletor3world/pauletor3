@@ -28,6 +28,8 @@ pub struct AppState {
     pub start_minimized: bool,
     /// Convite recebido por link (`pauletor3://entrar/...`) esperando o assistente.
     pub pending_invite: Mutex<Option<String>>,
+    /// Atualização encontrada, esperando o "Atualizar agora".
+    pub update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
     log_guard: Mutex<Option<tracing_appender_guard::Guard>>,
 }
 
@@ -201,6 +203,7 @@ pub fn run() {
             quitting: AtomicBool::new(false),
             start_minimized,
             pending_invite: Mutex::new(None),
+            update: tokio::sync::Mutex::new(None),
             log_guard: Mutex::new(None),
         })
         .setup(|app| {
@@ -277,6 +280,8 @@ pub fn run() {
             commands::test_webhook,
             commands::quit_app,
             commands::hide_window,
+            commands::update_check,
+            commands::update_install,
             setup::setup_suggest_dir,
             setup::setup_init,
             setup::invite_preview,

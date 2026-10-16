@@ -6,12 +6,12 @@ use chrono::{DateTime, Duration, Utc};
 use super::{LeaseInfo, Presence};
 
 /// Sem heartbeat (nem aviso de membro) por este tempo, a vez expira.
-pub const LEASE_TTL_SECS: i64 = 45;
+pub const LEASE_TTL_SECS: i64 = 30;
 /// Frequência do heartbeat do host.
 pub const HEARTBEAT_SECS: u64 = 10;
 /// Depois que a vez expira, durante este prazo só o membro com a réplica mais nova
 /// (entre os que estavam jogando) pode assumir.
-pub const FAILOVER_PREFERENCE_SECS: i64 = 20;
+pub const FAILOVER_PREFERENCE_SECS: i64 = 15;
 /// Presença mais velha que isto não conta (o app manda a cada 5–30 s).
 pub const PRESENCE_FRESH_SECS: i64 = 60;
 

@@ -431,3 +431,43 @@ pub async fn hide_window(app: AppHandle) -> CmdResult<()> {
     }
     Ok(())
 }
+
+#[derive(Serialize)]
+pub struct UpdateInfo {
+    pub version: String,
+    pub notes: Option<String>,
+}
+
+/// Procura atualização no Worker do dono (só membros do mundo baixam).
+#[tauri::command]
+pub async fn update_check(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<UpdateInfo>> {
+    use tauri_plugin_updater::UpdaterExt;
+    let e = engine(&state)?;
+    let (url, headers) = match e.updater_endpoint().await {
+        Ok(x) => x,
+        Err(_) => return Ok(None),
+    };
+    let url = url.parse().map_err(|err| CmdError::msg("Endereço de atualização inválido", format!("{err}")))?;
+    let mut b = app.updater_builder().endpoints(vec![url]).map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
+    for (k, v) in headers {
+        b = b.header(k, v).map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
+    }
+    let up = b.build().map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
+    let found = up.check().await.map_err(|err| CmdError::msg("Não consegui procurar atualização", err.to_string()))?;
+    let info = found.as_ref().map(|u| UpdateInfo { version: u.version.clone(), notes: u.body.clone() });
+    *state.update.lock().await = found;
+    Ok(info)
+}
+
+#[tauri::command]
+pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    let e = engine(&state)?;
+    if e.is_hosting().await {
+        return Err(CmdError::msg("Feche a sessão antes de atualizar", "A atualização reinicia o app."));
+    }
+    let Some(u) = state.update.lock().await.take() else {
+        return Err(CmdError::msg("Nenhuma atualização pendente", "Procure de novo."));
+    };
+    u.download_and_install(|_, _| {}, || {}).await.map_err(|err| CmdError::msg("A atualização falhou", err.to_string()))?;
+    app.restart();
+}

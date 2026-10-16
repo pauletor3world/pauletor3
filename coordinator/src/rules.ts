@@ -1,8 +1,8 @@
 // As regras da coordenação — espelho exato de `core/src/coord/rules.rs`.
 // Os testes dos dois lados usam os mesmos casos.
 
-export const LEASE_TTL_MS = 45_000;
-export const FAILOVER_PREFERENCE_MS = 20_000;
+export const LEASE_TTL_MS = 30_000;
+export const FAILOVER_PREFERENCE_MS = 15_000;
 export const PRESENCE_FRESH_MS = 60_000;
 export const FORMAT_VERSION = 1;
 
