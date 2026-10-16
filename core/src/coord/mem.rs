@@ -406,7 +406,7 @@ mod tests {
         let hub = MemHub::new("Mundo", "a", "Ana");
         let a = hub.client("a");
         let c = hub.client("c");
-        assert!(matches!(c.view().await.unwrap().me, None));
+        assert!(c.view().await.unwrap().me.is_none());
         assert!(matches!(c.head().await, Err(NmError::Forbidden(_))));
         let inv = a.create_invite(&InviteOptions { hours: 1, uses: 1, preapproved: false }).await.unwrap();
         let token = inv.token.unwrap();

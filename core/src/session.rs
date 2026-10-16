@@ -419,7 +419,7 @@ impl Engine {
                 Some((Some(&m.id) == host.as_ref(), p.replica_seq, addr))
             })
             .collect();
-        cands.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+        cands.sort_by_key(|c| std::cmp::Reverse((c.0, c.1)));
         if cands.is_empty() {
             return None;
         }
@@ -693,7 +693,7 @@ impl Engine {
         match prev_view.as_ref().and_then(|v| v.lease.held().cloned()) {
             Some(l) if l.holder != me && l.purpose == LeasePurpose::Hosting => {
                 let reach = match l.endpoint.as_deref().map(p2p::parse_addr) {
-                    Some(Ok(addr)) if playing || n % 3 == 0 || self.host_reachable.lock().unwrap().is_none() => match node.ping(&addr).await {
+                    Some(Ok(addr)) if playing || n.is_multiple_of(3) || self.host_reachable.lock().unwrap().is_none() => match node.ping(&addr).await {
                         Ok(d) => {
                             rtt = Some(d.as_millis() as u64);
                             true
