@@ -445,6 +445,18 @@ impl Engine {
             self.phase(Phase::Preparing);
         }
 
+        // Este PC pode estar em outra rede Tailscale (pessoal): troca para a do mundo.
+        if std::env::var_os("PAULETOR3_TEST_IP").is_none() {
+            let st = tailscale::status().await;
+            if !tailscale::on_world(&st, cfg.world_tailnet.as_deref()) {
+                self.notice(NoticeLevel::Info, "Entrando na rede do mundo", "O Tailscale está sendo trocado para a rede do pAuletOr 3.");
+                let key = self.secrets.read().await.tailscale_auth_key.clone();
+                let t = tailscale::join_world(key.as_deref(), &cfg.player_name, cfg.world_tailnet.as_deref()).await?;
+                if cfg.world_tailnet.as_deref() != Some(t.as_str()) {
+                    self.update_config(|c| c.world_tailnet = Some(t.clone())).await?;
+                }
+            }
+        }
         let ip = tailscale::my_ip().await?;
         let remote = self.remote().await?;
         let se = SyncEngine::new(remote.clone(), self.paths.clone());

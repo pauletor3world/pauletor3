@@ -41,8 +41,16 @@ pub async fn run(engine: &Engine) -> Vec<Check> {
     let ts = tailscale::status().await;
     out.push(if !ts.installed {
         bad("tailscale", "Tailscale", Level::Error, "Não está instalado.", Some(("install_tailscale", "Instalar")))
+    } else if ts.running() && !tailscale::on_world(&ts, cfg.world_tailnet.as_deref()) {
+        bad(
+            "tailscale",
+            "Tailscale",
+            Level::Warn,
+            format!("Conectado em outra rede ({}). Para jogar, o app troca para a rede do mundo.", ts.tailnet.clone().unwrap_or_default()),
+            Some(("connect_tailscale", "Trocar agora")),
+        )
     } else if ts.running() {
-        ok("tailscale", "Tailscale", format!("Conectado ({})", ts.ipv4.clone().unwrap_or_default()))
+        ok("tailscale", "Tailscale", format!("Conectado à rede do mundo ({})", ts.ipv4.clone().unwrap_or_default()))
     } else {
         bad("tailscale", "Tailscale", Level::Error, format!("Desconectado ({}).", ts.backend_state), Some(("connect_tailscale", "Conectar")))
     });

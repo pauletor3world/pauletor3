@@ -173,9 +173,24 @@ pub async fn create_world(state: State<'_, AppState>, settings: WorldSettings) -
     Ok(())
 }
 
+#[derive(Serialize)]
+pub struct WorldNet {
+    #[serde(flatten)]
+    pub status: tailscale::Status,
+    pub world_tailnet: Option<String>,
+    /// Este PC está conectado à rede do mundo.
+    pub on_world: bool,
+}
+
 #[tauri::command]
-pub async fn tailscale_status() -> CmdResult<tailscale::Status> {
-    Ok(tailscale::status().await)
+pub async fn tailscale_status(state: State<'_, AppState>) -> CmdResult<WorldNet> {
+    let st = tailscale::status().await;
+    let world = match state.engine() {
+        Some(e) => e.config.read().await.world_tailnet.clone(),
+        None => None,
+    };
+    let on_world = world.is_some() && tailscale::on_world(&st, world.as_deref());
+    Ok(WorldNet { status: st, world_tailnet: world, on_world })
 }
 
 pub async fn install_tailscale_inner(e: &Arc<Engine>) -> CmdResult<()> {
@@ -212,36 +227,30 @@ pub async fn tailscale_install(state: State<'_, AppState>) -> CmdResult<()> {
     install_tailscale_inner(&engine(&state)?).await
 }
 
-/// Entra na rede do mundo com a chave (do convite ou digitada pelo dono).
+/// Entra na rede do mundo com a chave (do convite ou do dono), como um perfil a mais do
+/// Tailscale: as outras redes deste PC continuam disponíveis.
 #[tauri::command]
-pub async fn tailscale_up(state: State<'_, AppState>, auth_key: Option<String>) -> CmdResult<tailscale::Status> {
+pub async fn tailscale_up(state: State<'_, AppState>, auth_key: Option<String>) -> CmdResult<WorldNet> {
     let e = engine(&state)?;
-    let key = match auth_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty()) {
-        Some(k) => {
-            let k2 = k.clone();
-            e.update_secrets(|s| s.tailscale_auth_key = Some(k2)).await?;
-            k
+    let typed = auth_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
+    if let Some(k) = &typed {
+        if !k.starts_with("tskey-") {
+            return Err(CmdError::msg("Chave inválida", "A auth key do Tailscale começa com tskey-auth-."));
         }
-        None => e
-            .secrets()
-            .await
-            .tailscale_auth_key
-            .clone()
-            .ok_or_else(|| CmdError::msg("Falta a chave do Tailscale", "Cole a auth key."))?,
+        let k2 = k.clone();
+        e.update_secrets(|s| s.tailscale_auth_key = Some(k2)).await?;
+    }
+    let key = e.secrets().await.tailscale_auth_key.clone();
+    let (name, world) = {
+        let c = e.config.read().await;
+        (c.player_name.clone(), c.world_tailnet.clone())
     };
-    if !key.starts_with("tskey-") {
-        return Err(CmdError::msg("Chave inválida", "A auth key do Tailscale começa com tskey-auth-."));
-    }
-    let name = e.config.read().await.player_name.clone();
-    tailscale::up_with_key(&key, &name).await?;
-    for _ in 0..15 {
-        let st = tailscale::status().await;
-        if st.running() {
-            return Ok(st);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-    Ok(tailscale::status().await)
+    let t = tailscale::join_world(key.as_deref(), &name, world.as_deref()).await?;
+    let t2 = t.clone();
+    e.update_config(|c| c.world_tailnet = Some(t2)).await?;
+    let st = tailscale::status().await;
+    let on_world = tailscale::on_world(&st, Some(&t));
+    Ok(WorldNet { status: st, world_tailnet: Some(t), on_world })
 }
 
 #[derive(Deserialize)]
@@ -382,6 +391,7 @@ pub async fn create_invite(state: State<'_, AppState>, password: String) -> CmdR
         remote_root: c.remote_root.clone(),
         tailscale_auth_key: s.tailscale_auth_key.clone(),
         tailscale_key_expires: c.tailscale_key_expires,
+        tailscale_tailnet: c.world_tailnet.clone(),
         duckdns_domain: c.duckdns_domain.clone(),
         duckdns_token: s.duckdns_token.clone(),
         discord_webhook: s.discord_webhook.clone(),
@@ -413,9 +423,10 @@ pub async fn accept_invite(state: State<'_, AppState>, code: String, password: S
         s.discord_webhook = wh;
     })
     .await?;
-    let (root, domain, exp) = (p.remote_root.clone(), p.duckdns_domain.clone(), p.tailscale_key_expires);
+    let (root, domain, exp, tailnet) = (p.remote_root.clone(), p.duckdns_domain.clone(), p.tailscale_key_expires, p.tailscale_tailnet.clone());
     e.update_config(|c| {
         c.remote_root = root;
+        c.world_tailnet = tailnet;
         c.duckdns_domain = domain;
         c.tailscale_key_expires = exp;
         c.is_owner = false;

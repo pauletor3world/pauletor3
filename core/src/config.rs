@@ -35,6 +35,9 @@ pub struct Config {
     pub duckdns_domain: Option<String>,
     pub address_mode: AddressMode,
     pub tailscale_key_expires: Option<chrono::NaiveDate>,
+    /// Rede Tailscale do mundo; o app troca para ela para jogar.
+    #[serde(default)]
+    pub world_tailnet: Option<String>,
     pub notify_toasts: bool,
     pub notify_join_leave: bool,
     pub journal: JournalSettings,
@@ -56,6 +59,7 @@ impl Default for Config {
             duckdns_domain: None,
             address_mode: AddressMode::Duckdns,
             tailscale_key_expires: None,
+            world_tailnet: None,
             notify_toasts: true,
             notify_join_leave: true,
             journal: JournalSettings::default(),

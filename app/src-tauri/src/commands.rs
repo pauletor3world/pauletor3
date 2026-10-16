@@ -197,14 +197,13 @@ pub async fn run_fix(app: AppHandle, state: State<'_, AppState>, fix: String) ->
         }
         "connect_tailscale" => {
             let key = e.secrets().await.tailscale_auth_key.clone();
-            let name = e.config.read().await.player_name.clone();
-            match key {
-                Some(k) => {
-                    pauletor3_core::tailscale::up_with_key(&k, &name).await?;
-                    Ok("Tailscale conectado.".into())
-                }
-                None => Err(CmdError::msg("Sem chave do Tailscale", "Abra o app do Tailscale e faça login, ou peça um novo convite.")),
-            }
+            let (name, world) = {
+                let c = e.config.read().await;
+                (c.player_name.clone(), c.world_tailnet.clone())
+            };
+            let t = pauletor3_core::tailscale::join_world(key.as_deref(), &name, world.as_deref()).await?;
+            e.update_config(|c| c.world_tailnet = Some(t)).await?;
+            Ok("Conectado à rede do mundo.".into())
         }
         "install_tailscale" => {
             crate::setup::install_tailscale_inner(&e).await?;

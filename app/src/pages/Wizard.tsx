@@ -25,7 +25,7 @@ import { Button, ErrorBanner, Field, InfoNote, Progress, cx, inputCls } from "..
 import { api } from "../lib/api";
 import { bytes, dateTime, syncLabel } from "../lib/format";
 import { useAction } from "../lib/hooks";
-import type { LauncherCandidate, ManifestSummary, SyncProgress, TailscaleStatus, WorldSettings } from "../lib/types";
+import type { LauncherCandidate, ManifestSummary, SyncProgress, WorldNet, WorldSettings } from "../lib/types";
 
 type Role = "owner" | "friend";
 type StepId = "welcome" | "you" | "cloud" | "world" | "invite_in" | "network" | "pc" | "invite_out" | "done";
@@ -257,6 +257,9 @@ function CloudStep({ next, back }: { next: () => void; back: () => void }) {
   const [cid, setCid] = useState("");
   const [secret, setSecret] = useState("");
   const { busy, error, run } = useAction();
+  useEffect(() => {
+    api.worldProbe().then(() => setOk(true)).catch(() => {});
+  }, []);
   return (
     <div>
       <StepHeader kicker="Passo 2" title="Conectar a nuvem do mundo">
@@ -415,7 +418,7 @@ function InviteIn({ next, back }: { next: () => void; back: () => void }) {
 }
 
 function NetworkStep({ role, next, back }: { role: Role; next: () => void; back: () => void }) {
-  const [ts, setTs] = useState<TailscaleStatus | null>(null);
+  const [ts, setTs] = useState<WorldNet | null>(null);
   const [key, setKey] = useState("");
   const [exp, setExp] = useState("");
   const [domain, setDomain] = useState("pauletor3");
@@ -428,7 +431,7 @@ function NetworkStep({ role, next, back }: { role: Role; next: () => void; back:
     look();
   }, []);
   const owner = role === "owner";
-  const connected = !!ts && ts.backend_state === "Running" && !!ts.ipv4;
+  const connected = !!ts && ts.on_world;
 
   return (
     <div>
@@ -439,7 +442,7 @@ function NetworkStep({ role, next, back }: { role: Role; next: () => void; back:
         <div className="rounded-2xl bg-night-850/70 ring-1 ring-white/[0.06] p-5 space-y-3">
           <div className="flex items-center justify-between">
             <div className="font-display text-[16px] font-semibold">Tailscale</div>
-            {ts && <span className={cx("text-[12px] font-medium", connected ? "text-moss-300" : "text-sun-300")}>{!ts.installed ? "não instalado" : connected ? `conectado · ${ts.ipv4}` : ts.backend_state}</span>}
+            {ts && <span className={cx("text-[12px] font-medium", connected ? "text-moss-300" : "text-sun-300")}>{!ts.installed ? "não instalado" : connected ? `na rede do mundo · ${ts.ipv4}` : ts.backend_state === "Running" ? `em outra rede (${ts.tailnet ?? "?"})` : ts.backend_state}</span>}
           </div>
           {ts && !ts.installed && (
             <>
@@ -451,6 +454,11 @@ function NetworkStep({ role, next, back }: { role: Role; next: () => void; back:
           )}
           {ts?.installed && !connected && (
             <>
+              {ts.backend_state === "Running" && (
+                <p className="text-[12.5px] text-ink-muted">
+                  Este PC já usa o Tailscale em outra rede. O app adiciona a rede do mundo como um perfil a mais: a sua continua lá e dá para alternar pelo ícone do Tailscale.
+                </p>
+              )}
               {owner && (
                 <div className="grid grid-cols-[1fr_170px] gap-2">
                   <Field label="Auth key reutilizável" hint="login.tailscale.com → Settings → Keys → Generate auth key (marque Reusable).">

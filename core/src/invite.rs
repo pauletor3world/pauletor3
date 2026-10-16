@@ -26,6 +26,8 @@ pub struct InvitePayload {
     pub remote_root: String,
     pub tailscale_auth_key: Option<String>,
     pub tailscale_key_expires: Option<chrono::NaiveDate>,
+    #[serde(default)]
+    pub tailscale_tailnet: Option<String>,
     pub duckdns_domain: Option<String>,
     pub duckdns_token: Option<String>,
     pub discord_webhook: Option<String>,
@@ -119,6 +121,7 @@ mod tests {
             remote_root: "pAuletOr3".into(),
             tailscale_auth_key: Some("tskey-auth-abc".into()),
             tailscale_key_expires: None,
+            tailscale_tailnet: None,
             duckdns_domain: Some("pauletor3".into()),
             duckdns_token: Some("dd".into()),
             discord_webhook: None,

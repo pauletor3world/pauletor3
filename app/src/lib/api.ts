@@ -11,7 +11,7 @@ import type {
   SettingsView,
   Stats,
   Status,
-  TailscaleStatus,
+  WorldNet,
   WorldPlayer,
   WorldSettings,
   AddressMode,
@@ -96,9 +96,9 @@ export const api = {
     invoke<{ has_world: boolean; head: ManifestSummary | null; settings: WorldSettings | null }>("world_probe"),
   importWorld: (folder: string) => invoke<LevelInfo>("import_world", { folder }),
   createWorld: (settings: WorldSettings) => invoke<void>("create_world", { settings }),
-  tailscaleStatus: () => invoke<TailscaleStatus>("tailscale_status"),
+  tailscaleStatus: () => invoke<WorldNet>("tailscale_status"),
   tailscaleInstall: () => invoke<void>("tailscale_install"),
-  tailscaleUp: (authKey?: string) => invoke<TailscaleStatus>("tailscale_up", { authKey }),
+  tailscaleUp: (authKey?: string) => invoke<WorldNet>("tailscale_up", { authKey }),
   saveNetwork: (args: {
     duckdns_domain?: string;
     duckdns_token?: string;

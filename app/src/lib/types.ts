@@ -212,6 +212,11 @@ export interface TailscaleStatus {
   key_expiry: string | null;
 }
 
+export interface WorldNet extends TailscaleStatus {
+  world_tailnet: string | null;
+  on_world: boolean;
+}
+
 export interface AppInfo {
   version: string;
   configured: boolean;
