@@ -49,7 +49,9 @@ export const api = {
     player_name?: string;
     minecraft_dir?: string;
     launcher_path?: string;
+    direct_launch?: boolean;
     ram_mb?: number;
+    client_ram_mb?: number;
     checkpoint_minutes?: number;
     grace_minutes?: number;
     notify_toasts?: boolean;

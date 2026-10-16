@@ -33,7 +33,7 @@ use crate::server::{LaunchOptions, ServerProcess, WhitelistEntry};
 use crate::stats::{SessionLog, Stats};
 use crate::sync::{ActiveSession, LocalState, ObjectSource, PushMeta, SyncEngine};
 use crate::versions::{Versions, WorldSettings};
-use crate::{checkpoint, java, launcher, license, retention, server, serversdat, util};
+use crate::{checkpoint, client, java, launcher, license, retention, server, serversdat, util};
 use crate::{NmError, NmResult, SERVER_PORT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -103,6 +103,8 @@ pub struct Status {
     pub online: Vec<String>,
     pub members: Vec<MemberView>,
     pub sync: Option<SyncProgress>,
+    /// Baixando/conferindo o Minecraft para abrir direto pelo app.
+    pub client_prep: Option<SyncProgress>,
     /// Endereço que o jogador usa no Minecraft (sempre o mesmo).
     pub address: String,
     /// O Minecraft deste PC está dentro do mundo agora.
@@ -204,6 +206,10 @@ pub struct Engine {
     /// Quando este PC começou a passar o host (o próprio jogo espera na porta e não acorda o
     /// mundo aqui de novo).
     handoff_at: std::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Preparando/abrindo o Minecraft direto (uma tarefa por vez).
+    client_busy: AtomicBool,
+    /// Alguém pediu para abrir o jogo enquanto a preparação rodava.
+    client_launch_wanted: AtomicBool,
 }
 
 impl Engine {
@@ -244,6 +250,7 @@ impl Engine {
             online: vec![],
             members: vec![],
             sync: None,
+            client_prep: None,
             address: config.game_address(),
             playing: false,
             host_client_running: false,
@@ -281,6 +288,8 @@ impl Engine {
             background: std::sync::Mutex::new(None),
             world_lock: Mutex::new(()),
             handoff_at: std::sync::Mutex::new(None),
+            client_busy: AtomicBool::new(false),
+            client_launch_wanted: AtomicBool::new(false),
         }))
     }
 
@@ -1264,23 +1273,151 @@ impl Engine {
         out
     }
 
-    /// Garante a entrada "pAuletOr 3" no Minecraft e abre o launcher.
-    pub async fn open_game(&self) {
+    /// Abre o Minecraft já entrando no mundo: direto pelo app (build pessoal) ou pelo launcher,
+    /// com a entrada "pAuletOr 3" pronta na lista de servidores.
+    pub async fn open_game(self: &Arc<Self>) {
         let cfg = self.config.read().await.clone();
-        if let Some(mc) = &cfg.minecraft_dir {
-            if !launcher::client_running(None) {
-                if let Err(e) = serversdat::ensure_entry(mc, &cfg.game_address(), &self.paths.backups()) {
-                    tracing::warn!(error = %e, "não consegui criar a entrada no servers.dat");
-                }
-            }
-        }
         if launcher::client_running(None) {
             return;
+        }
+        if cfg.launches_directly() {
+            self.client_task(true);
+            return;
+        }
+        if let Some(mc) = &cfg.minecraft_dir {
+            if let Err(e) = serversdat::ensure_entry(mc, &cfg.game_address(), &self.paths.backups()) {
+                tracing::warn!(error = %e, "não consegui criar a entrada no servers.dat");
+            }
         }
         if let Some(l) = &cfg.launcher_path {
             if let Err(e) = launcher::open(l) {
                 tracing::warn!(error = %e, "não consegui abrir o launcher");
             }
+        }
+    }
+
+    /// Baixa e confere o Minecraft com antecedência (para o primeiro Jogar abrir na hora).
+    pub async fn prefetch_client(self: &Arc<Self>) {
+        if self.config.read().await.launches_directly() {
+            self.client_task(false);
+        }
+    }
+
+    /// Uma tarefa por vez prepara o cliente; um pedido de abrir no meio da preparação é
+    /// atendido quando ela termina (o clique em Jogar nunca se perde).
+    fn client_task(self: &Arc<Self>, launch: bool) {
+        if launch {
+            self.client_launch_wanted.store(true, Ordering::SeqCst);
+        }
+        if self.client_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = me.client_work().await {
+                    let wanted = me.client_launch_wanted.swap(false, Ordering::SeqCst);
+                    tracing::warn!(error = %e, "não consegui preparar/abrir o Minecraft");
+                    let h = e.human();
+                    me.set_status(|s| {
+                        s.client_prep = None;
+                        if wanted || launch {
+                            s.last_error = Some(h);
+                        }
+                    });
+                }
+                me.client_busy.store(false, Ordering::SeqCst);
+                if !me.client_launch_wanted.load(Ordering::SeqCst) || me.client_busy.swap(true, Ordering::SeqCst) {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Para a CLI: prepara (e abre, se `launch`) o cliente esperando terminar.
+    pub async fn client_now(self: &Arc<Self>, launch: bool) -> NmResult<()> {
+        if self.client_busy.swap(true, Ordering::SeqCst) {
+            return Err(NmError::Other(anyhow::anyhow!("o Minecraft já está sendo preparado")));
+        }
+        self.client_launch_wanted.store(launch, Ordering::SeqCst);
+        let r = self.client_work().await;
+        self.client_busy.store(false, Ordering::SeqCst);
+        r
+    }
+
+    /// Garante Java + cliente conferidos e, se pedido, abre o jogo entrando no mundo.
+    async fn client_work(self: &Arc<Self>) -> NmResult<()> {
+        let cfg = self.config.read().await.clone();
+        let versions = self.current_versions().await;
+        let pinned = versions
+            .client_meta()
+            .ok_or_else(|| NmError::VersionMismatch(format!("o app não conhece o cliente do Minecraft {}", versions.minecraft)))?;
+        let me = Arc::downgrade(self);
+        let last = std::sync::Mutex::new(std::time::Instant::now() - Duration::from_secs(1));
+        let progress: SyncProgressFn = Arc::new(move |p: SyncProgress| {
+            // o Java chega em milhares de pedaços: a interface só precisa de uns 5 quadros/s
+            let mut l = last.lock().unwrap();
+            if l.elapsed() < Duration::from_millis(200) && p.bytes_done < p.bytes_total {
+                return;
+            }
+            *l = std::time::Instant::now();
+            if let Some(me) = me.upgrade() {
+                me.set_status(|s| s.client_prep = Some(p));
+            }
+        });
+        let java = java::ensure_java(&self.paths, &versions, progress.clone()).await?;
+        let inst = client::ensure(&self.paths, &pinned, cfg.minecraft_dir.as_deref(), progress).await?;
+        if let Some(need) = inst.meta.java_version.as_ref().map(|j| j.major_version) {
+            if need > versions.java_major {
+                return Err(NmError::VersionMismatch(format!("o Minecraft {} precisa do Java {need}", inst.meta.id)));
+            }
+        }
+        self.set_status(|s| s.client_prep = None);
+        if !self.client_launch_wanted.swap(false, Ordering::SeqCst) || launcher::client_running(None) {
+            return Ok(());
+        }
+
+        inst.prepare_game_dir(cfg.minecraft_dir.as_deref())?;
+        if let Err(e) = serversdat::ensure_entry(&inst.layout.game(), &cfg.game_address(), &self.paths.backups()) {
+            tracing::warn!(error = %e, "não consegui criar a entrada no servers.dat do jogo");
+        }
+        let server_heap = self.is_hosting().await.then(|| crate::heap::effective_heap_mb(cfg.ram_mb));
+        let heap_mb = crate::heap::effective_client_heap_mb(cfg.client_ram_mb, server_heap);
+        let opts = client::LaunchOptions {
+            nick: cfg.player_name.clone(),
+            uuid: crate::players::offline_uuid(&cfg.player_name),
+            heap_mb,
+            quick_play: Some(cfg.game_address()),
+        };
+        let args = inst.command_line(&opts)?;
+        let log = self.paths.logs().join("minecraft-cliente.log");
+        let mut child = client::spawn(&inst, &client::javaw(&java), &args, &log)?;
+        tracing::info!(pid = child.id(), heap_mb, "Minecraft aberto direto pelo app");
+        self.notice(NoticeLevel::Info, "Abrindo o Minecraft", &format!("Entrando em {} como {}.", cfg.world_name, cfg.player_name));
+
+        // Vigia: se o jogo fechar com erro, avisa com o caminho do log.
+        let events = self.events.clone();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            if let Ok(st) = child.wait() {
+                tracing::info!(code = ?st.code(), secs = started.elapsed().as_secs(), "Minecraft fechou");
+                if !st.success() {
+                    let body = match st.code() {
+                        Some(c) => format!("Saiu com o código {c}. Detalhes em {}.", log.display()),
+                        None => format!("Detalhes em {}.", log.display()),
+                    };
+                    events(Event::Notice { level: NoticeLevel::Error, title: "O Minecraft fechou com erro".into(), body });
+                }
+            }
+        });
+        Ok(())
+    }
+
+    /// Versões fixadas do mundo (as embutidas se a nuvem não responder).
+    async fn current_versions(&self) -> Versions {
+        match self.backend().await {
+            Ok(b) => Versions::load(&*b.remote).await.ok().flatten().unwrap_or_else(Versions::builtin),
+            Err(_) => Versions::builtin(),
         }
     }
 

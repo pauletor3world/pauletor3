@@ -206,6 +206,7 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
   const [mc, setMc] = useState("");
   const [launchers, setLaunchers] = useState<LauncherCandidate[]>([]);
   const [launcher, setLauncher] = useState("");
+  const [direct, setDirect] = useState(false);
   const [eula, setEula] = useState(false);
   const { busy, error, run } = useAction();
   useEffect(() => {
@@ -214,6 +215,7 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
       setFree(s.free_space);
       setMc(s.minecraft_dir ?? "");
       setLaunchers(s.launchers);
+      setDirect(s.direct_launch);
       if (s.launchers[0]) setLauncher(s.launchers[0].path);
     });
   }, []);
@@ -245,7 +247,10 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
           <Field label="Pasta .minecraft">
             <input className={inputCls} value={mc} onChange={(e) => setMc(e.target.value)} />
           </Field>
-          <Field label="Launcher" hint={launchers.length ? "O botão Jogar abre ele." : "Nenhum encontrado; dá para escolher depois."}>
+          <Field
+            label={direct ? "Launcher (opcional)" : "Launcher"}
+            hint={direct ? "Não precisa: o app abre o Minecraft direto, já dentro do mundo." : launchers.length ? "O botão Jogar abre ele." : "Nenhum encontrado; dá para escolher depois."}
+          >
             <select className={inputCls} value={launcher} onChange={(e) => setLauncher(e.target.value)}>
               <option value="">— depois —</option>
               {launchers.map((l) => (

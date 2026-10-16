@@ -99,6 +99,8 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
 
   const sync = status.sync;
   const pct = syncPct(status) ?? 0;
+  const prep = status.client_prep;
+  const prepPct = prep ? (prep.bytes_total > 0 ? Math.min(100, (prep.bytes_done / prep.bytes_total) * 100) : 0) : 0;
 
   return (
     <div className="space-y-5">
@@ -182,6 +184,15 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
                       : ""
                   : ""
               }
+            />
+          </div>
+        )}
+        {prep && (
+          <div className="relative px-7 pb-6 animate-fade">
+            <Progress
+              value={prepPct}
+              label="Preparando o Minecraft"
+              sub={`${prep.bytes_total > 0 ? `${bytes(prep.bytes_done)} de ${bytes(prep.bytes_total)}` : "Conferindo arquivos"} · só na primeira vez, direto da Mojang`}
             />
           </div>
         )}

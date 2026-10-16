@@ -2,7 +2,7 @@ import { disable as autostartOff, enable as autostartOn, isEnabled as autostartI
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Card, CardTitle, ErrorBanner, Field, InfoNote, PageHeader, Pill, Toggle, inputCls } from "../components/ui";
+import { Button, Card, CardTitle, ErrorBanner, Field, InfoNote, PageHeader, Pill, Toggle, cx, inputCls } from "../components/ui";
 import { api } from "../lib/api";
 import { bytes } from "../lib/format";
 import { useAction, type Toast } from "../lib/hooks";
@@ -53,10 +53,30 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
 
         <Section title="Você e o jogo">
           <div className="grid grid-cols-2 gap-4">
-            <TextSetting label="Seu nick no Minecraft" value={c.player_name} hint="Igual ao do launcher. Não muda com o mundo aberto." onSave={(v) => save({ player_name: v })} />
+            <TextSetting label="Seu nick no Minecraft" value={c.player_name} hint={c.direct_launch && s.direct_launch_available ? "É o nome que aparece no jogo. Não muda com o mundo aberto." : "Igual ao do launcher. Não muda com o mundo aberto."} onSave={(v) => save({ player_name: v })} />
             <PathSetting label="Pasta .minecraft" value={c.minecraft_dir ?? ""} directory onSave={(v) => save({ minecraft_dir: v })} />
           </div>
-          <div className="mt-4">
+          {s.direct_launch_available && (
+            <div className="mt-4">
+              <Toggle
+                checked={c.direct_launch}
+                onChange={(v) => save({ direct_launch: v }, v ? "O Jogar abre o Minecraft direto" : "O Jogar abre o launcher")}
+                label="Abrir o Minecraft direto pelo app"
+                hint="Jogar já abre o jogo dentro do mundo, sem launcher e sem procurar o servidor. O app baixa o Minecraft oficial uma vez (aproveita o que já estiver na .minecraft) e confere cada arquivo."
+              />
+              {c.direct_launch && (
+                <div className="grid grid-cols-2 gap-4 mt-3">
+                  <NumberSetting
+                    label="Memória do jogo (MB)"
+                    value={c.client_ram_mb ?? 0}
+                    hint={`0 = automático (${(s.auto_client_heap_mb / 1024).toFixed(1).replace(".", ",")} GB; menos quando você hospeda, para sobrar para o servidor)`}
+                    onSave={(v) => save({ client_ram_mb: v })}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          <div className={cx("mt-4", s.direct_launch_available && c.direct_launch && "hidden")}>
             <Field label="Launcher" hint="Usado no botão Jogar para abrir o Minecraft.">
               <div className="flex gap-2">
                 <select

@@ -137,6 +137,8 @@ fn start_background(app: AppHandle, engine: Arc<Engine>) {
                 }
             }
         }
+        // Minecraft conferido (e baixado se faltar) antes do primeiro Jogar
+        engine.prefetch_client().await;
         let _ = app;
     });
 }

@@ -28,6 +28,12 @@ struct Cli {
 enum Cmd {
     /// Mostra o estado do mundo (quem hospeda, membros, HEAD, réplica).
     Status,
+    /// Baixa/confere o Minecraft e abre o jogo direto, entrando no mundo (build pessoal).
+    Jogo {
+        /// Só baixa e confere, sem abrir.
+        #[arg(long)]
+        so_baixar: bool,
+    },
     /// Dono: cria o mundo na coordenação (e importa uma pasta, se dada).
     CreateWorld {
         #[arg(long)]
@@ -178,6 +184,21 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(engine.journal.clone().run());
 
     match cli.cmd {
+        Cmd::Jogo { so_baixar } => {
+            let en = engine.clone();
+            let tick = tokio::spawn(async move {
+                loop {
+                    if let Some(p) = en.status().client_prep {
+                        eprint!("\r{:<22} {:>5.1}%  {}/{} arquivos   ", p.phase.label(), p.percent(), p.files_done, p.files_total);
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            });
+            let r = engine.client_now(!so_baixar).await;
+            tick.abort();
+            r.map_err(e)?;
+            println!("\n{}", if so_baixar { "Minecraft pronto" } else { "Minecraft aberto" });
+        }
         Cmd::Status => {
             engine.refresh().await.map_err(e)?;
             println!("{}", serde_json::to_string_pretty(&engine.status())?);

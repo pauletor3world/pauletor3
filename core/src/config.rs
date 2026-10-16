@@ -20,8 +20,13 @@ pub struct Config {
     pub world_name: String,
     pub minecraft_dir: Option<PathBuf>,
     pub launcher_path: Option<PathBuf>,
-    /// Heap manual em MB (None = automático).
+    /// Abrir o Minecraft direto pelo app (Java próprio, entra no mundo sozinho) em vez do
+    /// launcher. Só no build pessoal (o cliente entra em modo offline).
+    pub direct_launch: bool,
+    /// Heap manual do servidor em MB (None = automático).
     pub ram_mb: Option<u64>,
+    /// Memória do jogo em MB quando aberto direto (None = automático).
+    pub client_ram_mb: Option<u64>,
     pub checkpoint_minutes: u64,
     /// Tolerância depois que o último jogador sai, antes de encerrar.
     pub grace_minutes: u64,
@@ -50,7 +55,9 @@ impl Default for Config {
             world_name: "pAuletOr 3".into(),
             minecraft_dir: default_minecraft_dir(),
             launcher_path: None,
+            direct_launch: crate::OFFLINE_MODE,
             ram_mb: None,
+            client_ram_mb: None,
             checkpoint_minutes: 5,
             grace_minutes: 2,
             proxy_port: crate::GAME_PORT,
@@ -95,6 +102,11 @@ impl Config {
     /// (Drive/Tailscale) não tem mundo e volta para o assistente.
     pub fn ready(&self) -> bool {
         self.setup_complete && self.joined()
+    }
+
+    /// O botão Jogar abre o Minecraft direto (e não o launcher).
+    pub fn launches_directly(&self) -> bool {
+        crate::OFFLINE_MODE && self.direct_launch
     }
 
     /// Ligado a um mundo (coordenação + id).

@@ -6,6 +6,7 @@
 //! apenas clientes deste crate.
 
 pub mod checkpoint;
+pub mod client;
 pub mod config;
 pub mod coord;
 pub mod diagnostics;

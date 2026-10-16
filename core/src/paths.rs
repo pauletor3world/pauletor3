@@ -55,6 +55,10 @@ impl Paths {
     pub fn recovered(&self) -> PathBuf {
         self.root.join("recovered")
     }
+    /// Instalação do cliente Minecraft aberto direto pelo app (ver [`crate::client`]).
+    pub fn client(&self) -> PathBuf {
+        self.root.join("client")
+    }
     pub fn logs(&self) -> PathBuf {
         self.root.join("logs")
     }

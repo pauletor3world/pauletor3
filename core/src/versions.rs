@@ -71,6 +71,10 @@ pub struct Versions {
     pub lithium_version: String,
     /// Lithium (Modrinth); sha512 vem da API do Modrinth.
     pub lithium: PinnedFile,
+    /// JSON da versão do cliente (piston-meta da Mojang). O sha1 dele encadeia o resto:
+    /// client.jar, bibliotecas, índice de assets e configuração de log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minecraft_client: Option<PinnedFile>,
     pub java_major: u32,
     pub java_release: String,
     /// JRE Temurin para Windows x64 (Adoptium); sha256 vem da API do Adoptium.
@@ -93,6 +97,15 @@ impl Versions {
             fabric_loader: self.fabric_loader.clone(),
             lithium: self.lithium_version.clone(),
         }
+    }
+
+    /// Metadados do cliente. Um `versions.json` antigo (sem o campo) usa o embutido, se a
+    /// versão do Minecraft for a mesma.
+    pub fn client_meta(&self) -> Option<PinnedFile> {
+        self.minecraft_client.clone().or_else(|| {
+            let b = Self::builtin();
+            (b.minecraft == self.minecraft).then_some(b.minecraft_client).flatten()
+        })
     }
 
     pub async fn load(remote: &dyn Remote) -> NmResult<Option<Self>> {
@@ -191,6 +204,12 @@ mod tests {
         assert!(v.vanilla_server.sha1.is_some());
         assert!(v.lithium.sha512.is_some());
         assert!(v.java_windows_x64.sha256.is_some());
+        assert!(v.client_meta().unwrap().sha1.is_some());
+        // versions.json gravado antes do campo existir continua valendo
+        let mut old = serde_json::to_value(&v).unwrap();
+        old.as_object_mut().unwrap().remove("minecraft_client");
+        let old: Versions = serde_json::from_value(old).unwrap();
+        assert_eq!(old.client_meta(), v.minecraft_client);
     }
 
     #[test]

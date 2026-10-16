@@ -23,6 +23,8 @@ pub struct SetupSuggestion {
     pub existing_dir: Option<String>,
     pub minecraft_dir: Option<String>,
     pub launchers: Vec<pauletor3_core::launcher::LauncherCandidate>,
+    /// Este build abre o Minecraft direto (o launcher é opcional).
+    pub direct_launch: bool,
     pub free_space: Option<u64>,
     /// Convite que abriu o app (link `pauletor3://...`), se houver.
     pub pending_invite: Option<String>,
@@ -40,6 +42,7 @@ pub async fn setup_suggest_dir(state: State<'_, AppState>) -> CmdResult<SetupSug
         existing_dir: paths::resolve_data_dir().map(|p| p.display().to_string()),
         minecraft_dir: pauletor3_core::config::default_minecraft_dir().map(|p| p.display().to_string()),
         launchers: pauletor3_core::launcher::detect(),
+        direct_launch: pauletor3_core::OFFLINE_MODE,
         pending_invite: state.pending_invite.lock().unwrap().clone(),
         local_world: paths::resolve_data_dir()
             .map(|d| d.join("server").join("world"))
@@ -184,6 +187,8 @@ pub async fn prepare_runtime_inner(e: &Arc<Engine>) -> CmdResult<()> {
     server::prepare(&e.paths, &v, quiet()).await?;
     server::verify_install(&e.paths, &v)?;
     server::warm_up(&e.paths, &java).await?;
+    // o Minecraft (para abrir direto) baixa em segundo plano; o progresso aparece no Início
+    e.prefetch_client().await;
     Ok(())
 }
 

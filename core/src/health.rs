@@ -118,8 +118,19 @@ pub async fn run(engine: &Engine) -> Vec<Check> {
         (Some(_), Err(e)) => bad("versions", "Versões do servidor", Level::Warn, format!("{e}"), Some(("prepare", "Baixar e conferir"))),
     });
 
-    // servers.dat
-    if let Some(mc) = &cfg.minecraft_dir {
+    // Minecraft aberto direto pelo app
+    if cfg.launches_directly() {
+        let title = "Minecraft deste PC";
+        out.push(match (v.client_meta(), &st.client_prep) {
+            (None, _) => bad("client", title, Level::Error, format!("O app não conhece o cliente do Minecraft {}.", v.minecraft), None),
+            (Some(_), Some(p)) => ok("client", title, format!("Baixando... {:.0}%", p.percent())),
+            (Some(m), None) if crate::client::is_ready(&engine.paths, &m) => ok("client", title, format!("Minecraft {} pronto: Jogar abre o jogo já dentro do mundo.", v.minecraft)),
+            (Some(_), None) => bad("client", title, Level::Warn, "Ainda não baixado (baixa sozinho no primeiro Jogar).", Some(("prepare_client", "Baixar agora"))),
+        });
+    }
+
+    // servers.dat (só importa quando o jogo abre por um launcher)
+    if let (Some(mc), false) = (&cfg.minecraft_dir, cfg.launches_directly()) {
         let want = cfg.game_address();
         let cur = crate::serversdat::current_address(mc);
         out.push(match cur {

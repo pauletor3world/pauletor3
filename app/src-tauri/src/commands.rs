@@ -194,6 +194,10 @@ pub async fn run_fix(_app: AppHandle, state: State<'_, AppState>, fix: String) -
             crate::setup::prepare_runtime_inner(&e).await?;
             Ok("Java e servidor prontos.".into())
         }
+        "prepare_client" => {
+            e.prefetch_client().await;
+            Ok("Baixando o Minecraft; o progresso aparece no Início.".into())
+        }
         "open_settings" | "open_owner" => Ok(String::new()),
         other => Err(CmdError::msg("Ação desconhecida", other)),
     }
@@ -216,6 +220,9 @@ pub struct SettingsView {
     pub build: &'static str,
     pub auto_heap_mb: u64,
     pub total_ram_mb: u64,
+    /// Este build sabe abrir o Minecraft direto (build pessoal).
+    pub direct_launch_available: bool,
+    pub auto_client_heap_mb: u64,
     pub journal_categories: Vec<(Category, String, bool)>,
 }
 
@@ -233,6 +240,8 @@ pub async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView>
         build: if pauletor3_core::OFFLINE_MODE { "pessoal" } else { "padrão" },
         auto_heap_mb: pauletor3_core::heap::auto_heap_mb(total),
         total_ram_mb: total,
+        direct_launch_available: pauletor3_core::OFFLINE_MODE,
+        auto_client_heap_mb: pauletor3_core::heap::auto_client_heap_mb(total, None),
     })
 }
 
@@ -241,8 +250,11 @@ pub struct SettingsPatch {
     pub player_name: Option<String>,
     pub minecraft_dir: Option<String>,
     pub launcher_path: Option<String>,
+    pub direct_launch: Option<bool>,
     /// 0 = automático
     pub ram_mb: Option<u64>,
+    /// 0 = automático
+    pub client_ram_mb: Option<u64>,
     pub checkpoint_minutes: Option<u64>,
     pub grace_minutes: Option<u64>,
     pub notify_toasts: Option<bool>,
@@ -275,8 +287,14 @@ pub async fn save_settings(state: State<'_, AppState>, patch: SettingsPatch) -> 
         if let Some(v) = patch.launcher_path {
             c.launcher_path = (!v.is_empty()).then(|| v.into());
         }
+        if let Some(v) = patch.direct_launch {
+            c.direct_launch = v;
+        }
         if let Some(v) = patch.ram_mb {
             c.ram_mb = (v > 0).then_some(v);
+        }
+        if let Some(v) = patch.client_ram_mb {
+            c.client_ram_mb = (v > 0).then_some(v);
         }
         if let Some(v) = patch.checkpoint_minutes {
             c.checkpoint_minutes = v.clamp(1, 60);
@@ -311,6 +329,9 @@ pub async fn save_settings(state: State<'_, AppState>, patch: SettingsPatch) -> 
         }
     })
     .await?;
+    if patch.direct_launch == Some(true) {
+        e.prefetch_client().await;
+    }
     Ok(())
 }
 

@@ -123,6 +123,8 @@ export interface Status {
   online: string[];
   members: MemberView[];
   sync: SyncProgress | null;
+  /** Baixando/conferindo o Minecraft para abrir direto pelo app. */
+  client_prep: SyncProgress | null;
   address: string;
   playing: boolean;
   host_client_running: boolean;
@@ -195,7 +197,9 @@ export interface Config {
   world_name: string;
   minecraft_dir: string | null;
   launcher_path: string | null;
+  direct_launch: boolean;
   ram_mb: number | null;
+  client_ram_mb: number | null;
   checkpoint_minutes: number;
   grace_minutes: number;
   proxy_port: number;
@@ -215,6 +219,8 @@ export interface SettingsView {
   build: string;
   auto_heap_mb: number;
   total_ram_mb: number;
+  direct_launch_available: boolean;
+  auto_client_heap_mb: number;
   journal_categories: [Category, string, boolean][];
 }
 
@@ -259,6 +265,8 @@ export interface SetupSuggestion {
   existing_dir: string | null;
   minecraft_dir: string | null;
   launchers: LauncherCandidate[];
+  /** Este build abre o Minecraft direto (o launcher é opcional). */
+  direct_launch: boolean;
   free_space: number | null;
   pending_invite: string | null;
   local_world: string | null;
