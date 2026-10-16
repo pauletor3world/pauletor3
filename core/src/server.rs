@@ -16,7 +16,7 @@ use crate::logparse::{self, LogEvent};
 use crate::paths::Paths;
 use crate::rcon::Rcon;
 use crate::versions::{Versions, WorldSettings};
-use crate::{NmError, NmResult, GAME_PORT, RCON_PORT};
+use crate::{NmError, NmResult, OFFLINE_MODE, RCON_PORT};
 
 pub const LAUNCHER_JAR: &str = "fabric-server-launch.jar";
 
@@ -119,8 +119,26 @@ pub fn escape_prop(v: &str) -> String {
     out
 }
 
+/// Quem pode entrar (gerado a partir dos membros aprovados do mundo).
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct WhitelistEntry {
+    pub uuid: String,
+    pub name: String,
+}
+
+/// Grava o `whitelist.json` gerenciado (só membros aprovados do mundo).
+pub fn write_whitelist(paths: &Paths, entries: &[WhitelistEntry]) -> NmResult<()> {
+    let file = paths.server().join("whitelist.json");
+    crate::util::write_atomic(&file, &serde_json::to_vec_pretty(entries)?)?;
+    Ok(())
+}
+
 /// Gera o `server.properties` gerenciado. Chaves que não controlamos e que já existiam são mantidas.
-pub fn write_properties(paths: &Paths, s: &WorldSettings, server_ip: &str, rcon_password: &str) -> NmResult<()> {
+///
+/// O servidor escuta **só em 127.0.0.1**: quem conversa com ele é o proxy do app (que recebe
+/// os amigos pelo túnel P2P). Nada fica exposto na rede local nem na internet, e por isso não
+/// há regra de firewall nem porta aberta.
+pub fn write_properties(paths: &Paths, s: &WorldSettings, port: u16, rcon_password: &str, whitelist: bool) -> NmResult<()> {
     s.validate()?;
     let file = paths.server().join("server.properties");
     let mut props: BTreeMap<String, String> = BTreeMap::new();
@@ -136,13 +154,13 @@ pub fn write_properties(paths: &Paths, s: &WorldSettings, server_ip: &str, rcon_
         }
     }
     let managed: Vec<(&str, String)> = vec![
-        ("online-mode", "false".into()),
-        ("enforce-secure-profile", "false".into()),
-        ("white-list", "false".into()),
-        ("enforce-whitelist", "false".into()),
-        // O jogo escuta SÓ no IP do Tailscale: nunca na rede local nem na internet.
-        ("server-ip", server_ip.into()),
-        ("server-port", GAME_PORT.to_string()),
+        // O build padrão exige conta original; o modo offline só existe no build `personal`.
+        ("online-mode", (!OFFLINE_MODE).to_string()),
+        ("enforce-secure-profile", (!OFFLINE_MODE).to_string()),
+        ("white-list", whitelist.to_string()),
+        ("enforce-whitelist", whitelist.to_string()),
+        ("server-ip", "127.0.0.1".into()),
+        ("server-port", port.to_string()),
         ("enable-rcon", "true".into()),
         ("rcon.port", RCON_PORT.to_string()),
         ("rcon.password", escape_prop(rcon_password)),
@@ -190,7 +208,6 @@ pub struct ServerProcess {
 pub struct LaunchOptions {
     pub java: PathBuf,
     pub heap_mb: u64,
-    pub server_ip: String,
     pub rcon_password: String,
 }
 
@@ -237,11 +254,10 @@ impl ServerProcess {
                 }
             });
         }
-        let ip = if opts.server_ip.is_empty() { "127.0.0.1".to_string() } else { opts.server_ip.clone() };
         Ok(Arc::new(Self {
             child: Mutex::new(child),
             pid,
-            rcon_addr: format!("{ip}:{RCON_PORT}"),
+            rcon_addr: format!("127.0.0.1:{RCON_PORT}"),
             rcon_password: opts.rcon_password,
             rcon: Mutex::new(None),
             events,
@@ -361,6 +377,11 @@ impl ServerProcess {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
+
+    /// Mata o processo sem salvar (só para simular queda de energia nos testes).
+    pub async fn kill(&self) {
+        let _ = self.child.lock().await.kill().await;
+    }
 }
 
 enum Either {
@@ -396,15 +417,14 @@ mod tests {
         let paths = Paths::new(d.path());
         std::fs::create_dir_all(paths.server()).unwrap();
         std::fs::write(paths.server().join("server.properties"), "online-mode=true\nfoo=bar\n").unwrap();
-        write_properties(&paths, &WorldSettings::default(), "100.64.0.1", "senha").unwrap();
+        write_properties(&paths, &WorldSettings::default(), 25566, "senha", true).unwrap();
         let s = std::fs::read_to_string(paths.server().join("server.properties")).unwrap();
-        assert!(s.contains("online-mode=false\n"));
-        assert!(s.contains("enforce-secure-profile=false\n"));
-        assert!(s.contains("white-list=false\n"));
-        assert!(s.contains("server-ip=100.64.0.1\n"));
+        assert!(s.contains(&format!("online-mode={}\n", !OFFLINE_MODE)));
+        assert!(s.contains("white-list=true\n"));
+        assert!(s.contains("server-ip=127.0.0.1\n"), "só localhost");
+        assert!(s.contains("server-port=25566\n"));
         assert!(s.contains("enable-rcon=true\n"));
         assert!(s.contains("foo=bar\n"));
-        assert!(!s.contains("online-mode=true"));
     }
 
     #[test]

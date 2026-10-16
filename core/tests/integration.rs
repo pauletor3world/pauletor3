@@ -1,63 +1,64 @@
-//! Testes de integração do modelo de sincronização e da trava, usando o rclone de verdade
-//! com o backend `local` (sem Google Drive) e o remote em Rust puro para injetar falhas.
-//!
-//! O rclone é procurado em `PAULETOR3_RCLONE` ou `D:\DevTools\rclone\rclone.exe`.
+//! Testes de integração sem Minecraft: vários "PCs" (pastas e motores próprios) no mesmo
+//! processo, com a coordenação em memória (mesmas regras do Durable Object), a nuvem numa
+//! pasta (cifrada com a chave do mundo) e a rede P2P de verdade (iroh, só local).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
+use pauletor3_core::coord::mem::{MemCoordinator, MemHub};
+use pauletor3_core::coord::{rules, Coordinator, LeasePurpose, Presence};
 use pauletor3_core::events::quiet;
-use pauletor3_core::lock::{LockConfig, LockGuard, LockInfo, LockManager, LockPurpose, LockState, LockStatus, Liveness};
+use pauletor3_core::lease::{LeaseConfig, LeaseGuard, LeaseManager};
 use pauletor3_core::manifest::{FileEntry, ManifestKind, ServerVersions};
+use pauletor3_core::mirror;
+use pauletor3_core::p2p::{self, NetMode, Node, PeerObjects};
 use pauletor3_core::paths::Paths;
-use pauletor3_core::remote::{layout, write_json, FsRemote, RcloneRemote, Remote};
+use pauletor3_core::remote::{layout, EncryptedRemote, FsRemote, Remote};
 use pauletor3_core::retention::{self, Policy};
 use pauletor3_core::sync::{LocalState, PullOutcome, PushMeta, SyncEngine};
-use pauletor3_core::{mirror, NmError};
+use pauletor3_core::NmError;
 
-fn rclone_bin() -> Option<PathBuf> {
-    let p = std::env::var_os("PAULETOR3_RCLONE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"D:\DevTools\rclone\rclone.exe"));
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!("rclone não encontrado; teste com rclone pulado");
-        None
-    }
-}
+const KEY: [u8; 32] = [42u8; 32];
 
-struct Dead;
-#[async_trait::async_trait]
-impl Liveness for Dead {
-    async fn alive(&self, _: &LockInfo) -> bool {
-        false
-    }
-}
-
-fn fast_lock() -> LockConfig {
-    LockConfig { settle: Duration::from_millis(400), stale_after: Duration::from_secs(300), heartbeat_every: Duration::from_secs(30) }
-}
-
-/// Um "PC": pasta de dados própria.
+/// Um "PC": pasta de dados própria e identidade própria na coordenação.
 struct Pc {
     _dir: tempfile::TempDir,
     paths: Paths,
+    coord: MemCoordinator,
 }
 
 impl Pc {
-    fn new() -> Self {
+    fn new(hub: &MemHub, id: &str) -> Self {
         let d = tempfile::tempdir().unwrap();
         let paths = Paths::new(d.path());
         paths.ensure().unwrap();
-        Self { _dir: d, paths }
+        Self { _dir: d, paths, coord: hub.client(id) }
     }
     fn engine(&self, r: Arc<dyn Remote>) -> SyncEngine {
-        SyncEngine::new(r, self.paths.clone())
+        SyncEngine::new(r, Arc::new(self.coord.clone()), self.paths.clone())
     }
+    async fn acquire(&self, sid: &str, replica_seq: u64) -> Result<LeaseGuard, NmError> {
+        LeaseManager::new(Arc::new(self.coord.clone()), LeaseConfig::default())
+            .acquire(LeaseManager::new_request(sid, "Ana", LeasePurpose::Hosting, None, replica_seq))
+            .await
+    }
+}
+
+fn hub() -> MemHub {
+    let h = MemHub::new("pAuletOr 3", "a", "Ana");
+    for (id, nick) in [("b", "Bia"), ("c", "Caio")] {
+        h.add_member(id, nick);
+    }
+    h
+}
+
+/// Nuvem numa pasta, cifrada com a chave do mundo (como a de verdade).
+fn cloud(dir: &Path, tmp: &Path) -> (FsRemote, Arc<dyn Remote>) {
+    let fs = FsRemote::new(dir);
+    let r: Arc<dyn Remote> = Arc::new(EncryptedRemote::new(Arc::new(fs.clone()), KEY, tmp.to_path_buf()));
+    (fs, r)
 }
 
 /// Cria um mundo falso com level.dat válido (NBT gzip), regiões e playerdata.
@@ -95,7 +96,7 @@ fn meta(kind: ManifestKind, session: &str) -> PushMeta {
     }
 }
 
-async fn host_push(pc: &Pc, se: &SyncEngine, guard: &LockGuard, kind: ManifestKind, expected: Option<&str>) -> Result<String, NmError> {
+async fn host_push(pc: &Pc, se: &SyncEngine, guard: &LeaseGuard, kind: ManifestKind, expected: Option<&str>) -> Result<String, NmError> {
     mirror::mirror(&pc.paths.server(), &pc.paths.staging()).unwrap();
     se.push(&pc.paths.staging(), meta(kind, "sessao"), Some(guard), expected, true, quiet()).await.map(|m| m.id)
 }
@@ -105,52 +106,47 @@ fn fingerprint(server: &Path) -> BTreeMap<String, FileEntry> {
     for v in f.values_mut() {
         v.mtime = 0;
     }
+    f.remove("world/session.lock");
     f
-}
-
-async fn acquire(r: Arc<dyn Remote>, id: &str) -> LockGuard {
-    LockManager::new(r, Arc::new(Dead), fast_lock())
-        .acquire(LockInfo::new(id, "Ana", LockPurpose::Hosting), &[])
-        .await
-        .unwrap()
 }
 
 /// PC A cria o mundo e envia; PC B baixa e recebe exatamente o mesmo (hashes iguais).
 /// Depois B joga, envia, e A recebe as mudanças (só os objetos novos trafegam).
 #[tokio::test]
-async fn roundtrip_between_two_pcs_with_rclone() {
-    let Some(bin) = rclone_bin() else { return };
-    let remote_dir = tempfile::tempdir().unwrap();
-    let a = Pc::new();
-    let b = Pc::new();
-    let ra: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin.clone(), remote_dir.path(), a.paths.tmp()));
-    let rb: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin.clone(), remote_dir.path(), b.paths.tmp()));
+async fn roundtrip_between_two_pcs() {
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    let (fs, ra) = cloud(nuvem.path(), &a.paths.tmp());
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
 
     make_world(&a.paths.server(), 3);
-    let g = acquire(ra.clone(), "a1").await;
+    let g = a.acquire("a1", 0).await.unwrap();
     let sa = a.engine(ra.clone());
     let m1 = host_push(&a, &sa, &g, ManifestKind::Session, None).await.unwrap();
     g.release().await.unwrap();
     assert_eq!(sa.head().await.unwrap().unwrap().manifest, m1);
-    // session.lock nunca vai para a nuvem
+    assert_eq!(sa.replica_seq(), 1);
     assert!(!sa.fetch_manifest(&m1).await.unwrap().files.contains_key("world/session.lock"));
+    // a nuvem só tem bytes cifrados
+    let any = fs.list(layout::OBJECTS).await.unwrap()[0].name.clone();
+    let raw = fs.read(&format!("objects/{any}")).await.unwrap().unwrap();
+    assert_eq!(&raw[..4], b"P3E1");
 
     let sb = b.engine(rb.clone());
     assert_eq!(sb.pull(quiet()).await.unwrap(), PullOutcome::Updated);
-    let mut fa = fingerprint(&a.paths.server());
-    fa.remove("world/session.lock");
-    assert_eq!(fa, fingerprint(&b.paths.server()), "mundo idêntico no segundo PC");
+    assert_eq!(fingerprint(&a.paths.server()), fingerprint(&b.paths.server()), "mundo idêntico no segundo PC");
     assert_eq!(sb.pull(quiet()).await.unwrap(), PullOutcome::UpToDate);
 
     // B joga: muda uma região e cria outra
     std::fs::write(b.paths.world().join("region/r.0.0.mca"), vec![7u8; 41_000]).unwrap();
     std::fs::write(b.paths.world().join("region/r.9.9.mca"), vec![8u8; 5_000]).unwrap();
     let before = rb.list(layout::OBJECTS).await.unwrap().len();
-    let g = acquire(rb.clone(), "b1").await;
+    let g = b.acquire("b1", sb.replica_seq()).await.unwrap();
     let m2 = host_push(&b, &sb, &g, ManifestKind::Session, Some(&m1)).await.unwrap();
     g.release().await.unwrap();
-    let after = rb.list(layout::OBJECTS).await.unwrap().len();
-    assert_eq!(after - before, 2, "só os 2 arquivos novos foram enviados");
+    assert_eq!(rb.list(layout::OBJECTS).await.unwrap().len() - before, 2, "só os 2 arquivos novos foram enviados");
 
     assert_eq!(sa.pull(quiet()).await.unwrap(), PullOutcome::Updated);
     assert_eq!(fingerprint(&a.paths.server()), fingerprint(&b.paths.server()));
@@ -160,16 +156,15 @@ async fn roundtrip_between_two_pcs_with_rclone() {
 /// Envio interrompido no meio: o HEAD não muda e o mundo oficial continua íntegro.
 #[tokio::test]
 async fn interrupted_upload_never_moves_head() {
-    let remote_dir = tempfile::tempdir().unwrap();
-    let fs = FsRemote::new(remote_dir.path());
-    let r: Arc<dyn Remote> = Arc::new(fs.clone());
-    let a = Pc::new();
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (fs, r) = cloud(nuvem.path(), &a.paths.tmp());
     make_world(&a.paths.server(), 1);
     let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
+    let g = a.acquire("s", 0).await.unwrap();
     let m1 = host_push(&a, &se, &g, ManifestKind::Session, None).await.unwrap();
 
-    // muda tudo e derruba a "internet" depois de 2 objetos
     make_world(&a.paths.server(), 99);
     fs.fail_after(2);
     let err = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap_err();
@@ -177,44 +172,44 @@ async fn interrupted_upload_never_moves_head() {
     assert_eq!(se.head().await.unwrap().unwrap().manifest, m1, "HEAD intacto");
     assert_eq!(se.list_manifest_ids().await.unwrap(), vec![m1.clone()], "nenhum manifesto parcial");
 
-    // outro PC baixa e recebe a versão boa, íntegra
-    let b = Pc::new();
+    let b = Pc::new(&h, "b");
     fs.heal();
-    let sb = b.engine(r.clone());
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    let sb = b.engine(rb);
     sb.pull(quiet()).await.unwrap();
     let m = sb.fetch_manifest(&m1).await.unwrap();
     for (rel, e) in &m.files {
-        let h = pauletor3_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap();
-        assert_eq!(h, e.hash);
+        assert_eq!(pauletor3_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap(), e.hash);
     }
 
-    // a internet volta: o reenvio aproveita o que já subiu e publica
     let m2 = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap();
     assert_eq!(se.head().await.unwrap().unwrap().manifest, m2);
     g.release().await.unwrap();
 }
 
-/// Objeto corrompido no remote: o download é recusado e o mundo local bom não é tocado.
+/// Objeto corrompido na nuvem: o download é recusado e o mundo local bom não é tocado.
 #[tokio::test]
 async fn corrupted_object_aborts_without_touching_local_world() {
-    let remote_dir = tempfile::tempdir().unwrap();
-    let r: Arc<dyn Remote> = Arc::new(FsRemote::new(remote_dir.path()));
-    let a = Pc::new();
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (fs, r) = cloud(nuvem.path(), &a.paths.tmp());
     make_world(&a.paths.server(), 4);
     let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
+    let g = a.acquire("s", 0).await.unwrap();
     let m1 = host_push(&a, &se, &g, ManifestKind::Session, None).await.unwrap();
 
-    let b = Pc::new();
-    let sb = b.engine(r.clone());
+    let b = Pc::new(&h, "b");
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    let sb = b.engine(rb);
     sb.pull(quiet()).await.unwrap();
     let good = fingerprint(&b.paths.server());
 
-    // A envia versão nova; um objeto dela chega corrompido no remote
     std::fs::write(a.paths.world().join("region/r.1.0.mca"), vec![42u8; 33_000]).unwrap();
     let m2 = host_push(&a, &se, &g, ManifestKind::Session, Some(&m1)).await.unwrap();
-    let h = se.fetch_manifest(&m2).await.unwrap().files["world/region/r.1.0.mca"].hash.clone();
-    std::fs::write(remote_dir.path().join("objects").join(&h), b"estragado").unwrap();
+    let hash = se.fetch_manifest(&m2).await.unwrap().files["world/region/r.1.0.mca"].hash.clone();
+    // alguém adultera o objeto na nuvem (cifrado: nem abre com a chave)
+    fs.write(&format!("objects/{hash}"), b"estragado").await.unwrap();
 
     let err = sb.pull(quiet()).await.unwrap_err();
     assert!(matches!(err, NmError::Integrity(_)), "{err:?}");
@@ -223,41 +218,17 @@ async fn corrupted_object_aborts_without_touching_local_world() {
     g.release().await.unwrap();
 }
 
-/// Queda do host: a trava fica velha (heartbeat antigo + porta morta) e só é assumida com confirmação.
+/// Dois PCs clicando em Jogar ao mesmo tempo: só um hospeda (20 rodadas).
 #[tokio::test]
-async fn host_crash_stale_lock_and_takeover_with_rclone() {
-    let Some(bin) = rclone_bin() else { return };
-    let remote_dir = tempfile::tempdir().unwrap();
-    let tmp = tempfile::tempdir().unwrap();
-    let r: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin, remote_dir.path(), tmp.path().to_path_buf()));
-    let mut crashed = LockInfo::new("caiu", "Ana", LockPurpose::Hosting);
-    crashed.state = LockState::Active;
-    crashed.tailscale_ip = Some("127.0.0.1".into());
-    crashed.heartbeat_at = Utc::now() - chrono::Duration::minutes(7);
-    write_json(&*r, &layout::lock("caiu"), &crashed).await.unwrap();
-
-    let lm = LockManager::new(r.clone(), Arc::new(Dead), fast_lock());
-    assert!(matches!(lm.status().await.unwrap(), LockStatus::Stale { .. }));
-    let err = lm.acquire(LockInfo::new("bia", "Bia", LockPurpose::Hosting), &[]).await.unwrap_err();
-    assert!(matches!(err, NmError::StaleLock(ref l) if l.player == "Ana"));
-    let g = lm.acquire(LockInfo::new("bia", "Bia", LockPurpose::Hosting), &["caiu".into()]).await.unwrap();
-    assert!(matches!(lm.status().await.unwrap(), LockStatus::Held { lock } if lock.player == "Bia"));
-    g.release().await.unwrap();
-}
-
-/// Dois PCs clicando em Jogar ao mesmo tempo (via rclone): só um hospeda.
-#[tokio::test]
-async fn two_hosts_at_once_with_rclone() {
-    let Some(bin) = rclone_bin() else { return };
-    for round in 0..3 {
-        let remote_dir = tempfile::tempdir().unwrap();
-        let tmp = tempfile::tempdir().unwrap();
+async fn two_hosts_at_once_never() {
+    for round in 0..20 {
+        let h = hub();
         let mut tasks = vec![];
-        for i in 0..2 {
-            let r: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin.clone(), remote_dir.path(), tmp.path().join(format!("t{i}"))));
+        for id in ["a", "b", "c"] {
+            let c = h.client(id);
             tasks.push(tokio::spawn(async move {
-                LockManager::new(r, Arc::new(Dead), fast_lock())
-                    .acquire(LockInfo::new(&format!("pc{i}"), &format!("P{i}"), LockPurpose::Hosting), &[])
+                LeaseManager::new(Arc::new(c), LeaseConfig::default())
+                    .acquire(LeaseManager::new_request(&format!("s-{id}"), id, LeasePurpose::Hosting, None, 0))
                     .await
             }));
         }
@@ -271,68 +242,158 @@ async fn two_hosts_at_once_with_rclone() {
     }
 }
 
-/// Checkpoints durante a partida encadeiam o HEAD; um HEAD mudado por fora bloqueia a publicação.
+/// O host cai: a vez expira, quem estava jogando com a réplica mais nova tem a preferência,
+/// e o host antigo (se voltar) não consegue publicar por cima.
 #[tokio::test]
-async fn checkpoints_chain_and_foreign_head_is_never_overwritten() {
-    let remote_dir = tempfile::tempdir().unwrap();
-    let r: Arc<dyn Remote> = Arc::new(FsRemote::new(remote_dir.path()));
-    let a = Pc::new();
-    make_world(&a.paths.server(), 5);
-    let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
-    let base = host_push(&a, &se, &g, ManifestKind::Session, None).await.unwrap();
-    let mut last = base.clone();
-    for i in 0..3u8 {
-        std::fs::write(a.paths.world().join("playerdata/ana.dat"), format!("progresso {i}")).unwrap();
-        let id = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&last)).await.unwrap();
-        assert_eq!(se.fetch_manifest(&id).await.unwrap().parent.as_deref(), Some(last.as_str()));
-        last = id;
-    }
-    // alguém (bug, outro app) mexe no HEAD por fora
-    write_json(&*r, layout::HEAD, &pauletor3_core::sync::Head {
-        format: 1,
-        manifest: base.clone(),
-        seq: 99,
-        updated_at: Utc::now(),
-        updated_by: "intruso".into(),
-    })
-    .await
-    .unwrap();
-    std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"mais progresso").unwrap();
-    let err = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&last)).await.unwrap_err();
-    assert!(matches!(err, NmError::Integrity(_)));
-    assert_eq!(se.head().await.unwrap().unwrap().manifest, base, "não sobrescreve o HEAD alheio");
-    assert_eq!(se.list_manifest_ids().await.unwrap().len(), 5, "o progresso ficou salvo como manifesto solto");
+async fn crash_failover_prefers_newest_replica_and_fences_old_host() {
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (_, ra) = cloud(nuvem.path(), &a.paths.tmp());
+    make_world(&a.paths.server(), 9);
+    let sa = a.engine(ra);
+    let ga = a.acquire("sa", 0).await.unwrap();
+    let m1 = host_push(&a, &sa, &ga, ManifestKind::Checkpoint, None).await.unwrap();
+    let m2 = {
+        std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"progresso").unwrap();
+        host_push(&a, &sa, &ga, ManifestKind::Checkpoint, Some(&m1)).await.unwrap()
+    };
+    // b e c estão jogando; b tem a réplica da versão 2, c ficou na 1
+    let b = Pc::new(&h, "b");
+    let c = Pc::new(&h, "c");
+    b.coord.presence(&Presence { replica_seq: 2, playing: true, ..Default::default() }).await.unwrap();
+    c.coord.presence(&Presence { replica_seq: 1, playing: true, ..Default::default() }).await.unwrap();
+
+    // queda de energia do host: nada de heartbeat
+    ga.abandon().await;
+    h.clock.advance(chrono::Duration::seconds(rules::LEASE_TTL_SECS + 2));
+    b.coord.presence(&Presence { replica_seq: 2, playing: true, ..Default::default() }).await.unwrap();
+    c.coord.presence(&Presence { replica_seq: 1, playing: true, ..Default::default() }).await.unwrap();
+
+    assert!(matches!(c.acquire("sc", 1).await, Err(NmError::NotBestCandidate { best_seq: 2 })));
+    let gb = b.acquire("sb", 2).await.unwrap();
+    assert!(gb.session_number() > ga.session_number());
+
+    // b continua do HEAD e publica
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    let sb = b.engine(rb);
+    sb.pull(quiet()).await.unwrap();
+    std::fs::write(b.paths.world().join("playerdata/ana.dat"), b"continuou no b").unwrap();
+    let m3 = host_push(&b, &sb, &gb, ManifestKind::Checkpoint, Some(&m2)).await.unwrap();
+
+    // a volta à vida e tenta publicar o que tinha: barrado, sem tocar no HEAD
+    std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"progresso velho do a").unwrap();
+    let err = host_push(&a, &sa, &ga, ManifestKind::Checkpoint, Some(&m2)).await.unwrap_err();
+    assert!(matches!(err, NmError::LostLock), "{err:?}");
+    assert_eq!(sa.head().await.unwrap().unwrap().manifest, m3);
+}
+
+/// Réplica velha nunca vence a nova: mesmo com a vez livre, publicar exige partir do HEAD.
+#[tokio::test]
+async fn stale_replica_cannot_overwrite_newer_world() {
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    let (_, ra) = cloud(nuvem.path(), &a.paths.tmp());
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    make_world(&a.paths.server(), 2);
+    let sa = a.engine(ra);
+    let sb = b.engine(rb);
+    let g = a.acquire("s1", 0).await.unwrap();
+    let m1 = host_push(&a, &sa, &g, ManifestKind::Session, None).await.unwrap();
+    g.release().await.unwrap();
+    sb.pull(quiet()).await.unwrap(); // b fica com a versão 1
+
+    let g = a.acquire("s2", 1).await.unwrap();
+    std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"novo").unwrap();
+    let m2 = host_push(&a, &sa, &g, ManifestKind::Session, Some(&m1)).await.unwrap();
+    g.release().await.unwrap();
+
+    // b tenta publicar a partir da cópia velha (bug ou app antigo): vira manifesto solto
+    let g = b.acquire("s3", 1).await.unwrap();
+    std::fs::write(b.paths.world().join("playerdata/ana.dat"), b"velho").unwrap();
+    let err = host_push(&b, &sb, &g, ManifestKind::Session, Some(&m1)).await.unwrap_err();
+    assert!(matches!(err, NmError::Integrity(_)), "{err:?}");
+    assert_eq!(sb.head().await.unwrap().unwrap().manifest, m2, "o mundo novo continua oficial");
     g.release().await.unwrap();
 }
 
-/// Perder a trava no meio da sessão impede gravar o HEAD.
+/// Coordenação fora do ar: nada é publicado; quando volta, o envio continua de onde parou.
 #[tokio::test]
-async fn lost_lock_blocks_head() {
-    let remote_dir = tempfile::tempdir().unwrap();
-    let r: Arc<dyn Remote> = Arc::new(FsRemote::new(remote_dir.path()));
-    let a = Pc::new();
-    make_world(&a.paths.server(), 6);
-    let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
+async fn coordinator_outage_and_partition() {
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (_, r) = cloud(nuvem.path(), &a.paths.tmp());
+    make_world(&a.paths.server(), 5);
+    let se = a.engine(r);
+    let g = a.acquire("s", 0).await.unwrap();
     let m1 = host_push(&a, &se, &g, ManifestKind::Session, None).await.unwrap();
-    r.delete(&layout::lock("s")).await.unwrap(); // alguém assumiu
-    std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"x").unwrap();
+
+    // só este PC perde a coordenação (partição)
+    a.coord.set_offline(true);
+    std::fs::write(a.paths.world().join("playerdata/ana.dat"), b"durante a queda").unwrap();
     let err = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap_err();
-    assert!(matches!(err, NmError::LostLock), "{err:?}");
-    assert_eq!(se.head().await.unwrap().unwrap().manifest, m1);
+    assert!(matches!(err, NmError::Remote(_)), "{err:?}");
+    // os outros continuam vendo o HEAD bom e não conseguem hospedar (a vez segue com a)
+    let b = Pc::new(&h, "b");
+    assert_eq!(b.coord.head().await.unwrap().unwrap().manifest, m1);
+    assert!(matches!(b.acquire("sb", 1).await, Err(NmError::HeldBy(_))));
+
+    // coordenação volta
+    a.coord.set_offline(false);
+    let m2 = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap();
+    assert_eq!(se.head().await.unwrap().unwrap().manifest, m2);
+
+    // queda geral: ninguém publica nada
+    h.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(matches!(b.acquire("sb", 2).await, Err(NmError::Remote(_))));
+    h.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    g.release().await.unwrap();
+}
+
+/// Réplica por P2P: B copia o mundo direto do cache de A, com a nuvem fora do ar.
+#[tokio::test]
+async fn p2p_replica_works_without_cloud() {
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    let (fs, ra) = cloud(nuvem.path(), &a.paths.tmp());
+    make_world(&a.paths.server(), 6);
+    let sa = a.engine(ra);
+    let g = a.acquire("s", 0).await.unwrap();
+    let m1 = host_push(&a, &sa, &g, ManifestKind::Session, None).await.unwrap();
+
+    let na = Node::start(&p2p::new_secret(), NetMode::LocalOnly, &a.paths).await.unwrap();
+    let nb = Node::start(&p2p::new_secret(), NetMode::LocalOnly, &b.paths).await.unwrap();
+    na.set_members([nb.id_hex().as_str()]);
+    nb.set_members([na.id_hex().as_str()]);
+
+    // a nuvem "cai" para downloads: tudo tem que vir de A
+    fs.fail_after(0);
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    let peers: Arc<dyn pauletor3_core::sync::ObjectSource> = Arc::new(PeerObjects { node: nb.clone(), peers: vec![na.endpoint.addr()] });
+    let sb = b.engine(rb).with_peers(Some(peers));
+    let head = sb.prefetch(quiet()).await.unwrap().unwrap();
+    assert_eq!(head.manifest, m1);
+    assert_eq!(sb.replica_seq(), head.seq, "réplica em dia sem a nuvem");
+    sb.pull(quiet()).await.unwrap();
+    assert_eq!(fingerprint(&a.paths.server()), fingerprint(&b.paths.server()));
+    g.release().await.unwrap();
 }
 
 /// Restaurar cria um manifesto novo apontando para os mesmos objetos; a história fica.
 #[tokio::test]
 async fn restore_creates_new_version() {
-    let Some(bin) = rclone_bin() else { return };
-    let remote_dir = tempfile::tempdir().unwrap();
-    let a = Pc::new();
-    let r: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin, remote_dir.path(), a.paths.tmp()));
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (_, r) = cloud(nuvem.path(), &a.paths.tmp());
     make_world(&a.paths.server(), 7);
     let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
+    let g = a.acquire("s", 0).await.unwrap();
     let m1 = host_push(&a, &se, &g, ManifestKind::Session, None).await.unwrap();
     let v1 = fingerprint(&a.paths.server());
     std::fs::write(a.paths.world().join("region/r.2.0.mca"), vec![1u8; 100]).unwrap();
@@ -344,45 +405,43 @@ async fn restore_creates_new_version() {
     assert_eq!(se.head().await.unwrap().unwrap().manifest, restored.id);
     assert_eq!(se.list_manifest_ids().await.unwrap().len(), 3, "nada apagado");
 
-    let b = Pc::new();
-    b.engine(r.clone()).pull(quiet()).await.unwrap();
+    let b = Pc::new(&h, "b");
+    let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
+    b.engine(rb).pull(quiet()).await.unwrap();
     assert_eq!(fingerprint(&b.paths.server()), v1);
 }
 
 /// GC: apaga manifestos fora da retenção e objetos órfãos, nunca algo que um manifesto mantido usa.
 #[tokio::test]
 async fn gc_keeps_what_is_referenced() {
-    let Some(bin) = rclone_bin() else { return };
-    let remote_dir = tempfile::tempdir().unwrap();
-    let a = Pc::new();
-    let r: Arc<dyn Remote> = Arc::new(RcloneRemote::local(bin, remote_dir.path(), a.paths.tmp()));
+    let h = hub();
+    let nuvem = tempfile::tempdir().unwrap();
+    let a = Pc::new(&h, "a");
+    let (fs, r) = cloud(nuvem.path(), &a.paths.tmp());
     make_world(&a.paths.server(), 8);
     let se = a.engine(r.clone());
-    let g = acquire(r.clone(), "s").await;
+    let g = a.acquire("s", 0).await.unwrap();
     let mut last: Option<String> = None;
     for i in 0..4u8 {
         std::fs::write(a.paths.world().join("region/r.5.0.mca"), vec![i; 20_000 + i as usize]).unwrap();
-        let mut m = meta(ManifestKind::Session, &format!("sessao{i}"));
-        m.session_started_at = Utc::now();
         mirror::mirror(&a.paths.server(), &a.paths.staging()).unwrap();
-        let id = se.push(&a.paths.staging(), m, Some(&g), last.as_deref(), true, quiet()).await.unwrap().id;
+        let id = se.push(&a.paths.staging(), meta(ManifestKind::Session, &format!("sessao{i}")), Some(&g), last.as_deref(), true, quiet()).await.unwrap().id;
         last = Some(id);
     }
     // lixo: objeto órfão de um envio interrompido
-    std::fs::write(remote_dir.path().join("objects").join("f".repeat(64)), b"orfao").unwrap();
+    fs.write(&format!("objects/{}", "f".repeat(64)), b"orfao").await.unwrap();
 
     let policy = Policy { last_sessions: 2, daily_days: 0 };
-    let dry = retention::gc(&se, &g, policy, true).await.unwrap();
-    assert_eq!(dry.manifests_deleted, 2);
+    assert_eq!(retention::gc(&se, &g, policy, true).await.unwrap().manifests_deleted, 2);
     let rep = retention::gc(&se, &g, policy, false).await.unwrap();
     assert_eq!(rep.manifests_deleted, 2);
-    assert!(rep.objects_deleted >= 3, "{rep:?}"); // 2 versões antigas de r.5.0 + órfão
+    assert!(rep.objects_deleted >= 3, "{rep:?}");
     g.release().await.unwrap();
 
-    // todo manifesto restante continua baixável e íntegro
     for id in se.list_manifest_ids().await.unwrap() {
-        let b = Pc::new();
+        let b = Pc::new(&h, "b");
+        let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
         let m = se.fetch_manifest(&id).await.unwrap();
-        b.engine(r.clone()).materialize(&m, &b.paths.server(), quiet()).await.unwrap();
+        b.engine(rb).materialize(&m, &b.paths.server(), quiet()).await.unwrap();
     }
 }

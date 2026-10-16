@@ -62,7 +62,16 @@ pub async fn report(engine: &Engine, checks: &[Check]) -> String {
     r.push_str(&format!("- Windows: {}\n", sysinfo::System::long_os_version().unwrap_or_default()));
     r.push_str(&format!("- RAM: {} MB · heap: {} MB\n", crate::heap::total_ram_mb(), crate::heap::effective_heap_mb(cfg.ram_mb)));
     r.push_str(&format!("- Fase: {:?} · hospedando: {} · recuperação pendente: {}\n", st.phase, st.me_hosting, st.recovery_pending));
-    r.push_str(&format!("- Checkpoint: {} min · tolerância: {} min · modo de endereço: {:?}\n", cfg.checkpoint_minutes, cfg.grace_minutes, cfg.address_mode));
+    r.push_str(&format!("- Checkpoint: {} min · tolerância: {} min · proxy: {}\n", cfg.checkpoint_minutes, cfg.grace_minutes, cfg.game_address()));
+    r.push_str(&format!(
+        "- Rede P2P: iniciada={} online={} · até o host: {} ({} ms) · coordenação ok={}\n",
+        st.net.started,
+        st.net.online,
+        st.net.path_to_host.as_deref().unwrap_or("-"),
+        st.net.rtt_ms.map(|m| m.to_string()).unwrap_or_else(|| "-".into()),
+        st.coord_ok
+    ));
+    r.push_str(&format!("- Réplica: versão {} de {} · build: {}\n", st.replica_seq, st.head_seq.unwrap_or(0), if crate::OFFLINE_MODE { "pessoal" } else { "padrão" }));
     if let Some(h) = &st.head {
         r.push_str(&format!("- HEAD: {} ({:?}, {} arquivos, {})\n", h.id, h.kind, h.file_count, crate::util::human_bytes(h.total_size)));
     }

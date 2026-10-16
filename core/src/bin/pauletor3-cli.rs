@@ -1,15 +1,16 @@
 //! pauletor3-cli — a mesma lógica do app, pela linha de comando (testes e emergências).
 //!
-//! Pasta de dados: `--home` ou `PAULETOR3_HOME` (padrão: a mesma do app).
-//! `--local-remote <pasta>` usa uma pasta local (via rclone `:local:`) em vez do Google Drive.
+//! Pasta de dados: `--home` ou `PAULETOR3_HOME` (padrão: a mesma do app). Com pastas
+//! diferentes, dá para simular vários "PCs" na mesma máquina.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use pauletor3_core::coord::InviteOptions;
 use pauletor3_core::events::{Event, EventSink};
 use pauletor3_core::paths::{self, Paths};
-use pauletor3_core::remote::RcloneRemote;
 use pauletor3_core::session::{EndReason, Engine};
 use pauletor3_core::{health, util};
 
@@ -19,29 +20,68 @@ struct Cli {
     /// Pasta de dados do app.
     #[arg(long, global = true)]
     home: Option<PathBuf>,
-    /// Usa uma pasta local como "nuvem" (testes).
-    #[arg(long, global = true)]
-    local_remote: Option<PathBuf>,
-    /// Caminho do rclone.exe.
-    #[arg(long, global = true)]
-    rclone: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Mostra quem está hospedando, o HEAD e o estado local.
+    /// Mostra o estado do mundo (quem hospeda, membros, HEAD, réplica).
     Status,
-    /// Hospeda o mundo e fica rodando até a sessão acabar (Ctrl+C encerra com segurança).
-    Play {
-        /// Assumir uma sessão abandonada (id da trava).
+    /// Dono: cria o mundo na coordenação (e importa uma pasta, se dada).
+    CreateWorld {
         #[arg(long)]
-        takeover: Option<String>,
-        /// Encerra depois de N segundos (testes).
+        coord: String,
+        #[arg(long)]
+        admin: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        nick: String,
+        #[arg(long)]
+        import: Option<PathBuf>,
+    },
+    /// Amigo: entra no mundo pelo link (ou código) do convite.
+    Join {
+        invite: String,
+        #[arg(long)]
+        nick: String,
+    },
+    /// Dono: cria um link de convite.
+    Invite {
+        #[arg(long, default_value_t = 48)]
+        hours: u32,
+        #[arg(long, default_value_t = 5)]
+        uses: u32,
+        /// Quem entrar precisa da sua aprovação.
+        #[arg(long)]
+        approval: bool,
+    },
+    /// Lista os membros.
+    Members,
+    /// Dono: aprova um membro (id ou nick).
+    Approve { who: String },
+    /// Dono: remove um membro (id ou nick).
+    Remove { who: String },
+    /// Liga a rede e fica online como o app (presença, proxy, réplica e failover automático).
+    /// Com `--play`, também hospeda.
+    Up {
+        #[arg(long)]
+        play: bool,
+        /// Encerra (com segurança) depois de N segundos.
         #[arg(long)]
         stop_after: Option<u64>,
         /// Força um salvamento automático depois de N segundos (testes).
+        #[arg(long)]
+        checkpoint_after: Option<u64>,
+        /// Simula queda de energia depois de N segundos hospedando (testes de failover).
+        #[arg(long)]
+        crash_after: Option<u64>,
+    },
+    /// Hospeda até a sessão acabar (atalho para `up --play`).
+    Play {
+        #[arg(long)]
+        stop_after: Option<u64>,
         #[arg(long)]
         checkpoint_after: Option<u64>,
     },
@@ -49,9 +89,11 @@ enum Cmd {
     Recover,
     /// Lista as versões do mundo.
     Timeline,
+    /// Diário do mundo.
+    Diary,
     /// Restaura uma versão (cria uma nova; nada é apagado).
     Restore { manifest: String },
-    /// Coleta de lixo no remote.
+    /// Coleta de lixo na nuvem.
     Gc {
         #[arg(long)]
         dry_run: bool,
@@ -64,12 +106,10 @@ enum Cmd {
     Diagnose,
     /// Estatísticas.
     Stats,
-    /// Lê/define a configuração local (nome do jogador, dono, EULA...).
+    /// Lê/define a configuração local.
     Setup {
         #[arg(long)]
         player: Option<String>,
-        #[arg(long)]
-        owner: bool,
         #[arg(long)]
         accept_eula: bool,
         #[arg(long)]
@@ -77,7 +117,9 @@ enum Cmd {
         #[arg(long)]
         grace_minutes: Option<u64>,
         #[arg(long)]
-        direct_ip: bool,
+        proxy_port: Option<u16>,
+        #[arg(long)]
+        auto_failover: Option<bool>,
     },
     /// Importa uma pasta de mundo como nova versão (dono).
     Import { folder: PathBuf },
@@ -89,14 +131,17 @@ enum Cmd {
     Fingerprint { server_dir: PathBuf },
 }
 
-fn default_rclone() -> PathBuf {
-    let exe = std::env::current_exe().ok();
-    let candidates = [
-        exe.as_ref().and_then(|e| e.parent().map(|d| d.join("rclone.exe"))),
-        exe.as_ref().and_then(|e| e.parent().map(|d| d.join("rclone-x86_64-pc-windows-msvc.exe"))),
-        Some(PathBuf::from(r"D:\DevTools\rclone\rclone.exe")),
-    ];
-    candidates.into_iter().flatten().find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("rclone"))
+fn e(err: pauletor3_core::NmError) -> anyhow::Error {
+    anyhow::anyhow!("{err}")
+}
+
+async fn member_id(engine: &Engine, who: &str) -> anyhow::Result<String> {
+    let v = engine.view().await.ok_or_else(|| anyhow::anyhow!("sem fotografia do mundo"))?;
+    v.members
+        .iter()
+        .find(|m| m.id == who || m.nick.eq_ignore_ascii_case(who))
+        .map(|m| m.id.clone())
+        .ok_or_else(|| anyhow::anyhow!("membro não encontrado: {who}"))
 }
 
 #[tokio::main]
@@ -110,7 +155,6 @@ async fn main() -> anyhow::Result<()> {
     let p = Paths::new(&home);
     p.ensure()?;
     let _log = pauletor3_core::logging::init(&p.logs(), true)?;
-    let rclone = cli.rclone.clone().unwrap_or_else(default_rclone);
 
     let printer: EventSink = Arc::new(|e: Event| match e {
         Event::Sync(s) => eprint!("\r{:<22} {:>5.1}%   ", s.phase.label(), s.percent()),
@@ -125,92 +169,69 @@ async fn main() -> anyhow::Result<()> {
         Event::StatusChanged => {}
     });
 
-    let engine = match &cli.local_remote {
-        Some(dir) => {
-            std::fs::create_dir_all(dir)?;
-            let r = RcloneRemote::local(rclone.clone(), dir, p.tmp());
-            Engine::with_remote(p.clone(), Arc::new(r), printer)?
-        }
-        None => Engine::open(p.clone(), rclone.clone(), printer)?,
-    };
+    let engine = Engine::open(p.clone(), printer)?;
     tokio::spawn(engine.journal.clone().run());
 
     match cli.cmd {
         Cmd::Status => {
-            engine.refresh().await?;
+            engine.refresh().await.map_err(e)?;
             println!("{}", serde_json::to_string_pretty(&engine.status())?);
         }
-        Cmd::Setup { player, owner, accept_eula, checkpoint_minutes, grace_minutes, direct_ip } => {
-            let c = engine
-                .update_config(|c| {
-                    if let Some(p) = player {
-                        c.player_name = p;
-                    }
-                    if owner {
-                        c.is_owner = true;
-                    }
-                    if accept_eula {
-                        c.eula_accepted = true;
-                    }
-                    if let Some(m) = checkpoint_minutes {
-                        c.checkpoint_minutes = m;
-                    }
-                    if let Some(m) = grace_minutes {
-                        c.grace_minutes = m;
-                    }
-                    if direct_ip {
-                        c.address_mode = pauletor3_core::config::AddressMode::DirectIp;
-                    }
-                    c.setup_complete = !c.player_name.is_empty();
-                })
-                .await?;
-            println!("{}", serde_json::to_string_pretty(&c)?);
+        Cmd::CreateWorld { coord, admin, name, nick, import } => {
+            engine.create_world(&coord, &admin, &name, &nick, import).await.map_err(e)?;
+            println!("mundo criado: {}", engine.config.read().await.world_id.clone().unwrap_or_default());
         }
-        Cmd::Play { takeover, stop_after, checkpoint_after } => {
-            engine.play(takeover.into_iter().collect(), false).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!("\nhospedando em {}", engine.status().address.unwrap_or_default());
-            if let Some(secs) = checkpoint_after {
-                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
-                match engine.force_checkpoint().await {
-                    Ok(()) => println!("\ncheckpoint publicado"),
-                    Err(e) => {
-                        eprintln!("\ncheckpoint falhou: {e}; encerrando a sessão com segurança");
-                        engine.stop(EndReason::UserStop).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-                        anyhow::bail!("checkpoint falhou: {e}");
-                    }
-                }
+        Cmd::Join { invite, nick } => {
+            let r = engine.join_world(&invite, &nick).await.map_err(e)?;
+            println!(
+                "você entrou no mundo {} de {}{}",
+                r.name,
+                r.owner_nick,
+                if r.approved { "" } else { " (aguardando aprovação do dono)" }
+            );
+        }
+        Cmd::Invite { hours, uses, approval } => {
+            let (_, link) = engine.create_invite(InviteOptions { hours, uses, preapproved: !approval }).await.map_err(e)?;
+            println!("{link}");
+        }
+        Cmd::Members => {
+            engine.refresh().await.map_err(e)?;
+            for m in engine.status().members {
+                println!(
+                    "{}  {:<16} {:<7} {}{}{}",
+                    &m.id[..12],
+                    m.nick,
+                    format!("{:?}", m.role).to_lowercase(),
+                    if m.approved { "" } else { "pendente " },
+                    if m.online { "online " } else { "" },
+                    if m.hosting { "hospedando" } else { "" }
+                );
             }
-            let wait = async {
-                loop {
-                    if !engine.is_hosting().await {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                }
-            };
-            tokio::select! {
-                _ = wait => {}
-                _ = tokio::signal::ctrl_c() => {
-                    eprintln!("\nencerrando com segurança…");
-                    engine.stop(EndReason::UserStop).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-                }
-                _ = async {
-                    match stop_after {
-                        Some(s) => tokio::time::sleep(std::time::Duration::from_secs(s)).await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    engine.stop(EndReason::UserStop).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-                }
-            }
-            println!("\nsessão encerrada; HEAD = {:?}", engine.status().head.map(|h| h.id));
+        }
+        Cmd::Approve { who } => {
+            engine.refresh().await.map_err(e)?;
+            let id = member_id(&engine, &who).await?;
+            engine.set_member(&id, Some(true), false).await.map_err(e)?;
+            println!("aprovado");
+        }
+        Cmd::Remove { who } => {
+            engine.refresh().await.map_err(e)?;
+            let id = member_id(&engine, &who).await?;
+            engine.set_member(&id, None, true).await.map_err(e)?;
+            println!("removido");
+        }
+        Cmd::Up { play, stop_after, checkpoint_after, crash_after } => {
+            run_up(&engine, play, stop_after, checkpoint_after, crash_after).await?;
+        }
+        Cmd::Play { stop_after, checkpoint_after } => {
+            run_up(&engine, true, stop_after, checkpoint_after, None).await?;
         }
         Cmd::Recover => {
-            engine.recover().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            engine.recover().await.map_err(e)?;
             println!("ok");
         }
         Cmd::Timeline => {
-            for m in engine.timeline().await? {
+            for m in engine.timeline().await.map_err(e)? {
                 println!(
                     "{}  {:<22} {:<12} {:>10}  {}",
                     m.id,
@@ -221,17 +242,23 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Cmd::Diary => {
+            for ev in engine.diary(100).await.map_err(e)? {
+                println!("{}  {:<12} {}", ev.at.with_timezone(&chrono::Local).format("%d/%m %H:%M"), ev.kind, ev.text);
+            }
+        }
         Cmd::Restore { manifest } => {
-            engine.restore(manifest).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            engine.restore(manifest).await.map_err(e)?;
             println!("restaurado");
         }
         Cmd::Gc { dry_run } => {
-            let r = engine.gc(dry_run).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            let r = engine.gc(dry_run).await.map_err(e)?;
             println!("{}", serde_json::to_string_pretty(&r)?);
         }
         Cmd::Pull => {
-            let se = pauletor3_core::sync::SyncEngine::new(engine.remote().await?, p.clone());
-            let o = se.pull(Arc::new(|_| {})).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            let b = engine.backend().await.map_err(e)?;
+            let se = pauletor3_core::sync::SyncEngine::new(b.remote, b.coord, p.clone());
+            let o = se.pull(Arc::new(|_| {})).await.map_err(e)?;
             println!("{o:?}");
         }
         Cmd::Health => {
@@ -246,15 +273,39 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", pauletor3_core::diagnostics::report(&engine, &checks).await);
         }
         Cmd::Stats => {
-            println!("{}", serde_json::to_string_pretty(&engine.stats().await?)?);
+            println!("{}", serde_json::to_string_pretty(&engine.stats().await.map_err(e)?)?);
+        }
+        Cmd::Setup { player, accept_eula, checkpoint_minutes, grace_minutes, proxy_port, auto_failover } => {
+            let c = engine
+                .update_config(|c| {
+                    if let Some(p) = player {
+                        c.player_name = p;
+                    }
+                    if accept_eula {
+                        c.eula_accepted = true;
+                    }
+                    if let Some(m) = checkpoint_minutes {
+                        c.checkpoint_minutes = m;
+                    }
+                    if let Some(m) = grace_minutes {
+                        c.grace_minutes = m;
+                    }
+                    if let Some(pp) = proxy_port {
+                        c.proxy_port = pp;
+                    }
+                    if let Some(a) = auto_failover {
+                        c.auto_failover = a;
+                    }
+                })
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&c)?);
         }
         Cmd::Import { folder } => {
-            engine.import_world(folder).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-            println!("
-importado; HEAD = {:?}", engine.timeline().await?.first().map(|m| m.id.clone()));
+            engine.import_world(folder).await.map_err(e)?;
+            println!("\nimportado; HEAD = {:?}", engine.timeline().await.map_err(e)?.first().map(|m| m.id.clone()));
         }
         Cmd::Players => {
-            for p in engine.world_players().await.map_err(|e| anyhow::anyhow!("{e}"))? {
+            for p in engine.world_players().await.map_err(e)? {
                 println!(
                     "{}  v{}  {:<16}  xp {:>3}  itens {:>3}  {:<22} {}{}",
                     p.uuid,
@@ -269,7 +320,7 @@ importado; HEAD = {:?}", engine.timeline().await?.first().map(|m| m.id.clone()))
             }
         }
         Cmd::MigratePlayer { uuid, nick } => {
-            let m = engine.migrate_player(uuid, nick).await.map_err(|e| anyhow::anyhow!("{e}"))?;
+            let m = engine.migrate_player(uuid, nick).await.map_err(e)?;
             println!("{}", serde_json::to_string_pretty(&m)?);
         }
         Cmd::Fingerprint { server_dir } => {
@@ -279,6 +330,73 @@ importado; HEAD = {:?}", engine.timeline().await?.first().map(|m| m.id.clone()))
         }
     }
     // dá um instante para o diário esvaziar a fila
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    Ok(())
+}
+
+/// Fica online como o app. Imprime mudanças de estado (para os testes de ponta a ponta lerem).
+async fn run_up(engine: &Arc<Engine>, play: bool, stop_after: Option<u64>, checkpoint_after: Option<u64>, crash_after: Option<u64>) -> anyhow::Result<()> {
+    engine.start_network().await.map_err(e)?;
+    let _ = engine.refresh().await;
+    if let Some(a) = engine.proxy_addr().await {
+        println!("proxy local em {a}");
+    }
+    if play {
+        engine.play_with(pauletor3_core::session::PlayTrigger::Button, false).await.map_err(e)?;
+        println!("\nhospedando");
+    }
+    let started = tokio::time::Instant::now();
+    let mut checkpointed = false;
+    let mut last_line = String::new();
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nencerrando com segurança…");
+                engine.stop(EndReason::UserStop).await.map_err(e)?;
+                break;
+            }
+        }
+        let st = engine.status();
+        let host = st.lease.as_ref().and_then(|l| l.held().map(|l| l.player.clone()));
+        let line = format!(
+            "fase={:?} hospedando={} host={} replica={}/{} jogando={} failover={}",
+            st.phase,
+            st.me_hosting,
+            host.unwrap_or_else(|| "-".into()),
+            st.replica_seq,
+            st.head_seq.unwrap_or(0),
+            st.playing,
+            st.failover.clone().unwrap_or_default()
+        );
+        if line != last_line {
+            println!("[{:>5}s] {line}", started.elapsed().as_secs());
+            last_line = line;
+        }
+        if let Some(s) = checkpoint_after {
+            if !checkpointed && st.me_hosting && started.elapsed() >= Duration::from_secs(s) {
+                checkpointed = true;
+                match engine.force_checkpoint().await {
+                    Ok(()) => println!("checkpoint publicado"),
+                    Err(err) => eprintln!("checkpoint falhou: {err}"),
+                }
+            }
+        }
+        if let Some(s) = crash_after {
+            if st.me_hosting && started.elapsed() >= Duration::from_secs(s) {
+                println!("SIMULANDO QUEDA DE ENERGIA");
+                engine.simulate_crash().await;
+                std::process::exit(9);
+            }
+        }
+        if let Some(s) = stop_after {
+            if started.elapsed() >= Duration::from_secs(s) {
+                engine.stop(EndReason::UserStop).await.map_err(e)?;
+                break;
+            }
+        }
+    }
+    println!("encerrado; HEAD = {:?}", engine.status().head.map(|h| h.id));
+    engine.stop_network().await;
     Ok(())
 }

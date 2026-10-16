@@ -1,12 +1,16 @@
 //! Sincronização atômica e versionada (o coração do sistema).
 //!
-//! Remote:
+//! Armazenamento ([`Remote`], a nuvem do mundo):
 //! ```text
 //! objects/<sha256>        cada arquivo do mundo, guardado uma vez, pelo hash
 //! manifests/<id>.json     mapa caminho → objeto de uma versão completa
-//! HEAD.json               aponta para o manifesto atual — gravado POR ÚLTIMO
 //! ```
-//! Um envio interrompido nunca altera o HEAD: o mundo oficial continua íntegro.
+//! O HEAD (qual manifesto é o oficial) mora na coordenação e só muda por CAS, **por último**,
+//! depois de todos os objetos e do manifesto confirmados no armazenamento. Um envio
+//! interrompido nunca altera o HEAD: o mundo oficial continua íntegro.
+//!
+//! Os objetos que faltam são buscados primeiro nos PCs dos amigos (P2P, ver
+//! [`ObjectSource`]) e só depois na nuvem; o hash é conferido do mesmo jeito.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{Read, Write};
@@ -18,20 +22,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::{SyncPhase, SyncProgress, SyncProgressFn};
 use crate::hashing;
-use crate::lock::LockGuard;
+use crate::coord::{Coordinator, Head};
+use crate::lease::LeaseGuard;
 use crate::manifest::{self, FileEntry, HashIndex, Manifest, ManifestKind, ManifestSummary, ServerVersions};
 use crate::paths::Paths;
-use crate::remote::{layout, read_json, write_json, Remote, TransferProgress};
+use crate::remote::{layout, ProgressFn, Remote, TransferProgress};
 use crate::util;
 use crate::{NmError, NmResult, FORMAT_VERSION};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Head {
-    pub format: u32,
-    pub manifest: String,
-    pub seq: u64,
-    pub updated_at: DateTime<Utc>,
-    pub updated_by: String,
+/// Outra fonte de objetos e manifestos (os PCs dos amigos, por P2P).
+#[async_trait::async_trait]
+pub trait ObjectSource: Send + Sync {
+    /// Bytes de um manifesto, se algum amigo tiver.
+    async fn fetch_manifest(&self, id: &str) -> Option<Vec<u8>>;
+    /// Baixa o que conseguir de `hashes` para `dir/<hash>` e devolve quais chegaram
+    /// (o hash ainda é conferido por quem chamou).
+    async fn fetch_objects(&self, hashes: &[String], dir: &Path, progress: ProgressFn) -> Vec<String>;
 }
 
 /// Estado local da cópia do mundo neste PC.
@@ -42,6 +48,15 @@ pub struct LocalState {
     /// A pasta do mundo tem mudanças que ainda não viraram HEAD (servidor rodou/caiu).
     pub dirty: bool,
     pub active_session: Option<ActiveSession>,
+    /// HEAD mais novo que este PC tem **inteiro e conferido** no cache (réplica local).
+    #[serde(default)]
+    pub replica: Option<ReplicaMark>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReplicaMark {
+    pub seq: u64,
+    pub manifest: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,7 +72,10 @@ pub struct ActiveSession {
     #[serde(default)]
     pub rcon_password: Option<String>,
     #[serde(default)]
-    pub server_ip: Option<String>,
+    pub server_port: Option<u16>,
+    /// `session_number` da vez desta sessão.
+    #[serde(default)]
+    pub session_number: Option<u64>,
 }
 
 impl LocalState {
@@ -96,18 +114,25 @@ pub enum PullOutcome {
 #[derive(Clone)]
 pub struct SyncEngine {
     pub remote: Arc<dyn Remote>,
+    pub coord: Arc<dyn Coordinator>,
+    pub peers: Option<Arc<dyn ObjectSource>>,
     pub paths: Paths,
 }
 
 impl SyncEngine {
-    pub fn new(remote: Arc<dyn Remote>, paths: Paths) -> Self {
-        Self { remote, paths }
+    pub fn new(remote: Arc<dyn Remote>, coord: Arc<dyn Coordinator>, paths: Paths) -> Self {
+        Self { remote, coord, peers: None, paths }
+    }
+
+    pub fn with_peers(mut self, peers: Option<Arc<dyn ObjectSource>>) -> Self {
+        self.peers = peers;
+        self
     }
 
     // ------------------------------------------------------------------ leitura
 
     pub async fn head(&self) -> NmResult<Option<Head>> {
-        let h: Option<Head> = read_json(&*self.remote, layout::HEAD).await?;
+        let h = self.coord.head().await?;
         if let Some(h) = &h {
             if h.format > FORMAT_VERSION {
                 return Err(NmError::FormatTooNew { found: h.format });
@@ -133,17 +158,23 @@ impl SyncEngine {
                 }
             }
         }
+        if let Some(p) = &self.peers {
+            if let Some(bytes) = p.fetch_manifest(id).await {
+                match parse_manifest(id, &bytes) {
+                    Ok(m) => {
+                        util::write_atomic(&cache, &bytes)?;
+                        return Ok(m);
+                    }
+                    Err(e) => tracing::warn!(%id, error = %e, "manifesto recebido por P2P ignorado"),
+                }
+            }
+        }
         let bytes = self
             .remote
             .read(&layout::manifest(id))
             .await?
-            .ok_or_else(|| NmError::Integrity(format!("manifesto {id} não existe no remote")))?;
-        let m: Manifest = serde_json::from_slice(&bytes)
-            .map_err(|e| NmError::Integrity(format!("manifesto {id} ilegível: {e}")))?;
-        if m.id != id {
-            return Err(NmError::Integrity(format!("manifesto {id} tem id {}", m.id)));
-        }
-        m.validate()?;
+            .ok_or_else(|| NmError::Integrity(format!("manifesto {id} não existe na nuvem")))?;
+        let m = parse_manifest(id, &bytes)?;
         util::write_atomic(&cache, &bytes)?;
         Ok(m)
     }
@@ -185,7 +216,7 @@ impl SyncEngine {
         &self,
         snapshot_root: &Path,
         meta: PushMeta,
-        guard: Option<&LockGuard>,
+        guard: Option<&LeaseGuard>,
         expected_head: Option<&str>,
         publish: bool,
         progress: SyncProgressFn,
@@ -280,7 +311,7 @@ impl SyncEngine {
         // 5) envio em lote
         if !missing.is_empty() {
             let p4 = progress.clone();
-            let pf: crate::remote::ProgressFn = Arc::new(move |t: TransferProgress| {
+            let pf: ProgressFn = Arc::new(move |t: TransferProgress| {
                 p4(SyncProgress {
                     phase: SyncPhase::Uploading,
                     bytes_done: t.bytes_done,
@@ -332,21 +363,22 @@ impl SyncEngine {
         };
         self.write_manifest(&m).await?;
 
-        // 8) HEAD — por último, e só se ainda formos os donos e o HEAD for o esperado
+        // 8) HEAD — por último, com CAS na coordenação (vez atual + HEAD esperado)
         if publish {
             let Some(guard) = guard else {
                 return Err(NmError::LostLock);
             };
-            let current = head.as_ref().map(|h| h.manifest.as_str());
-            if current != expected_head {
-                tracing::error!(?current, ?expected_head, "HEAD mudou por fora; manifesto fica solto");
-                return Err(NmError::Integrity(format!(
-                    "o HEAD mudou durante a sessão; esta versão ficou salva como {} na linha do tempo",
-                    m.id
-                )));
+            match guard.publish_head(expected_head, &m.id).await {
+                Ok(h) => self.mark_replica(h.seq, &m.id)?,
+                Err(NmError::HeadMoved { current }) => {
+                    tracing::error!(?current, ?expected_head, "HEAD mudou por fora; manifesto fica solto");
+                    return Err(NmError::Integrity(format!(
+                        "o HEAD mudou durante a sessão; esta versão ficou salva como {} na linha do tempo",
+                        m.id
+                    )));
+                }
+                Err(e) => return Err(e),
             }
-            guard.verify().await?;
-            self.write_head(&m.id, head.as_ref()).await?;
         }
         progress(SyncProgress { phase: SyncPhase::Publishing, bytes_done: 1, bytes_total: 1, files_done: 0, files_total: 0 });
         Ok(m)
@@ -368,25 +400,37 @@ impl SyncEngine {
         Ok(())
     }
 
-    async fn write_head(&self, id: &str, prev: Option<&Head>) -> NmResult<Head> {
-        let h = Head {
-            format: FORMAT_VERSION,
-            manifest: id.to_string(),
-            seq: prev.map(|p| p.seq + 1).unwrap_or(1),
-            updated_at: Utc::now(),
-            updated_by: util::machine_name(),
-        };
-        write_json(&*self.remote, layout::HEAD, &h).await?;
-        let back = self.head().await?;
-        if back.as_ref().map(|b| b.manifest.as_str()) != Some(id) {
-            return Err(NmError::Integrity("HEAD gravado não confere".into()));
+    /// Registra que o cache local tem inteira a versão `seq` (só avança).
+    fn mark_replica(&self, seq: u64, manifest: &str) -> NmResult<()> {
+        let mut st = LocalState::load(&self.paths);
+        if st.replica.as_ref().map(|r| r.seq < seq).unwrap_or(true) {
+            st.replica = Some(ReplicaMark { seq, manifest: manifest.to_string() });
+            st.save(&self.paths)?;
         }
-        Ok(h)
+        Ok(())
+    }
+
+    /// `seq` do HEAD mais novo que este PC tem inteiro.
+    pub fn replica_seq(&self) -> u64 {
+        LocalState::load(&self.paths).replica.map(|r| r.seq).unwrap_or(0)
+    }
+
+    /// Réplica em segundo plano: traz para o cache tudo o que o HEAD atual precisa, sem tocar
+    /// no mundo local. Quando alguém clicar em Jogar, quase tudo já está no disco.
+    pub async fn prefetch(&self, progress: SyncProgressFn) -> NmResult<Option<Head>> {
+        let Some(head) = self.head().await? else { return Ok(None) };
+        if self.replica_seq() >= head.seq {
+            return Ok(Some(head));
+        }
+        let m = self.fetch_manifest(&head.manifest).await?;
+        self.fetch_objects(&m, progress).await?;
+        self.mark_replica(head.seq, &head.manifest)?;
+        Ok(Some(head))
     }
 
     /// Restaura uma versão antiga: cria um manifesto novo (cópia) e aponta o HEAD para ele.
     /// A história nunca é apagada.
-    pub async fn restore(&self, target_id: &str, guard: &LockGuard, player: &str) -> NmResult<Manifest> {
+    pub async fn restore(&self, target_id: &str, guard: &LeaseGuard, player: &str) -> NmResult<Manifest> {
         let target = self.fetch_manifest(target_id).await?;
         let remote_objs: HashMap<String, u64> = self
             .remote
@@ -406,6 +450,7 @@ impl SyncEngine {
         let head = self.head().await?;
         let now = Utc::now();
         let info = guard.info().await;
+        let expected = head.as_ref().map(|h| h.manifest.clone());
         let m = Manifest {
             format: FORMAT_VERSION,
             id: manifest::new_manifest_id(now, player),
@@ -426,8 +471,7 @@ impl SyncEngine {
             files: target.files.clone(),
         };
         self.write_manifest(&m).await?;
-        guard.verify().await?;
-        self.write_head(&m.id, head.as_ref()).await?;
+        guard.publish_head(expected.as_deref(), &m.id).await?;
         Ok(m)
     }
 
@@ -451,6 +495,7 @@ impl SyncEngine {
         st.current_manifest = Some(m.id.clone());
         st.dirty = false;
         st.save(&self.paths)?;
+        self.mark_replica(head.seq, &head.manifest)?;
         Ok(PullOutcome::Updated)
     }
 
@@ -506,11 +551,58 @@ impl SyncEngine {
             return Ok(());
         }
         let landing = self.paths.incoming().join(format!("objetos-{}", uuid::Uuid::new_v4().simple()));
+        // Primeiro os amigos (P2P): rápido e sem gastar a cota da nuvem.
+        if let Some(peers) = &self.peers {
+            std::fs::create_dir_all(&landing)?;
+            let list: Vec<String> = needed.iter().cloned().collect();
+            let sizes: HashMap<String, u64> = m.files.values().map(|e| (e.hash.clone(), e.size)).collect();
+            let total: u64 = list.iter().map(|h| sizes.get(h).copied().unwrap_or(0)).sum();
+            let p = progress.clone();
+            let pf: ProgressFn = Arc::new(move |t: TransferProgress| {
+                p(SyncProgress {
+                    phase: SyncPhase::Downloading,
+                    bytes_done: t.bytes_done,
+                    bytes_total: total,
+                    files_done: t.files_done,
+                    files_total: t.files_total,
+                })
+            });
+            let got = peers.fetch_objects(&list, &landing, pf).await;
+            let landing2 = landing.clone();
+            let cache2 = cache.clone();
+            let good = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<String>> {
+                let mut good = vec![];
+                for h in got {
+                    let f = landing2.join(&h);
+                    match hashing::sha256_file(&f) {
+                        Ok(actual) if actual == h => {
+                            util::replace_file(&f, &cache2.join(&h))?;
+                            good.push(h);
+                        }
+                        _ => {
+                            tracing::warn!(hash = %h, "objeto recebido por P2P com hash errado; descartado");
+                            let _ = std::fs::remove_file(&f);
+                        }
+                    }
+                }
+                Ok(good)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!(e))??;
+            for h in good {
+                needed.remove(&h);
+            }
+            if needed.is_empty() {
+                let _ = util::remove_dir_all_retry(&landing);
+                return Ok(());
+            }
+            tracing::info!(faltam = needed.len(), "buscando na nuvem o que os amigos não tinham");
+        }
         let result = async {
             for attempt in 0..2 {
                 let list: Vec<String> = needed.iter().cloned().collect();
                 let p = progress.clone();
-                let pf: crate::remote::ProgressFn = Arc::new(move |t: TransferProgress| {
+                let pf: ProgressFn = Arc::new(move |t: TransferProgress| {
                     p(SyncProgress {
                         phase: SyncPhase::Downloading,
                         bytes_done: t.bytes_done,
@@ -567,6 +659,15 @@ impl SyncEngine {
         let mut idx = HashIndex::default();
         manifest::scan_files(server_dir, &mut idx, |_, _| {})
     }
+}
+
+fn parse_manifest(id: &str, bytes: &[u8]) -> NmResult<Manifest> {
+    let m: Manifest = serde_json::from_slice(bytes).map_err(|e| NmError::Integrity(format!("manifesto {id} ilegível: {e}")))?;
+    if m.id != id {
+        return Err(NmError::Integrity(format!("manifesto {id} tem id {}", m.id)));
+    }
+    m.validate()?;
+    Ok(m)
 }
 
 /// Copia cada arquivo do cache para a montagem, conferindo o hash durante a cópia.

@@ -1,0 +1,23 @@
+{
+  // Coordenação do pAuletOr 3. Publicação: scripts/publicar-coordenacao.ps1 (faz tudo).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pauletor3-coordenacao",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "WORLD", "class_name": "WorldDO" },
+      { "name": "BLOBS", "class_name": "BlobShardDO" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorldDO", "BlobShardDO"] }],
+  // Para usar R2 (precisa de cartão na Cloudflare): crie o bucket, descomente e troque STORAGE para "r2".
+  // "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "pauletor3-mundos" }],
+  "vars": {
+    "STORAGE": "do",
+    "DOWNLOAD_URL": "https://github.com/pauletor3world/pauletor3/releases/latest/download/pAuletOr3-setup.exe",
+    "QUOTA_BYTES": "4000000000",
+    "MAX_MEMBERS": "10"
+  },
+  "observability": { "enabled": true }
+}

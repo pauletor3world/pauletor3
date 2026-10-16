@@ -8,14 +8,25 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 pub struct Secrets {
-    /// Senha que criptografa a config do rclone (gerada pelo app).
-    pub rclone_config_pass: Option<String>,
-    pub tailscale_auth_key: Option<String>,
-    pub duckdns_token: Option<String>,
-    pub discord_webhook: Option<String>,
-    /// Backend do rclone e parâmetros do remote (JSON), para gerar convites.
-    pub remote_backend: Option<String>,
-    pub remote_params_json: Option<String>,
+    /// Chave secreta deste app (hex de 32 bytes): identidade P2P e assinatura na coordenação.
+    pub identity_key: Option<String>,
+    /// Chave do mundo (hex de 32 bytes): cifra tudo o que vai para a nuvem.
+    pub world_key: Option<String>,
+    /// Chave de administração do Worker (só no PC do dono): permite criar mundos.
+    pub admin_token: Option<String>,
+}
+
+impl Secrets {
+    pub fn identity(&self) -> Option<[u8; 32]> {
+        decode32(self.identity_key.as_deref()?)
+    }
+    pub fn world(&self) -> Option<[u8; 32]> {
+        decode32(self.world_key.as_deref()?)
+    }
+}
+
+fn decode32(h: &str) -> Option<[u8; 32]> {
+    hex::decode(h).ok()?.try_into().ok()
 }
 
 const MAGIC_DPAPI: &[u8] = b"NMDPAPI1";
@@ -107,13 +118,13 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("s.bin");
         let mut s = Secrets::default();
-        s.duckdns_token = Some("token-super-secreto".into());
+        s.admin_token = Some("token-super-secreto".into());
         s.save(&p).unwrap();
         let raw = std::fs::read(&p).unwrap();
         if cfg!(windows) {
             assert!(!String::from_utf8_lossy(&raw).contains("token-super-secreto"), "cifrado no disco");
         }
-        assert_eq!(Secrets::load(&p).unwrap().duckdns_token.as_deref(), Some("token-super-secreto"));
-        assert!(Secrets::load(&d.path().join("nao-existe")).unwrap().duckdns_token.is_none());
+        assert_eq!(Secrets::load(&p).unwrap().admin_token.as_deref(), Some("token-super-secreto"));
+        assert!(Secrets::load(&d.path().join("nao-existe")).unwrap().admin_token.is_none());
     }
 }

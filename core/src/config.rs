@@ -7,23 +7,17 @@ use serde::{Deserialize, Serialize};
 use crate::journal::JournalSettings;
 use crate::paths::Paths;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AddressMode {
-    /// Um nome DuckDNS fixo aponta para o IP do Tailscale do host atual.
-    #[default]
-    Duckdns,
-    /// Fallback: o app de cada jogador reescreve o IP do host no servers.dat.
-    DirectIp,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Config {
     /// Nome do jogador (mesmo nick usado no Minecraft).
     pub player_name: String,
-    /// Este PC é do dono (pode gerar convites e mudar as configurações do mundo).
-    #[serde(default)]
+    /// Este PC é do dono (convida, aprova membros, muda as configurações do mundo).
     pub is_owner: bool,
+    /// Endereço da coordenação (o Worker do dono).
+    pub coordinator_url: Option<String>,
+    pub world_id: Option<String>,
+    pub world_name: String,
     pub minecraft_dir: Option<PathBuf>,
     pub launcher_path: Option<PathBuf>,
     /// Heap manual em MB (None = automático).
@@ -31,13 +25,14 @@ pub struct Config {
     pub checkpoint_minutes: u64,
     /// Tolerância depois que o último jogador sai, antes de encerrar.
     pub grace_minutes: u64,
-    pub remote_root: String,
-    pub duckdns_domain: Option<String>,
-    pub address_mode: AddressMode,
-    pub tailscale_key_expires: Option<chrono::NaiveDate>,
-    /// Rede Tailscale do mundo; o app troca para ela para jogar.
-    #[serde(default)]
-    pub world_tailnet: Option<String>,
+    /// Porta do proxy local (o Minecraft entra em `localhost` nesta porta).
+    pub proxy_port: u16,
+    /// Se o host cair, este PC assume sozinho (se estava jogando).
+    pub auto_failover: bool,
+    /// Tentar entrar no mundo pelo Minecraft com ninguém hospedando acorda o mundo neste PC.
+    pub wake_on_join: bool,
+    /// Manter uma cópia atualizada do mundo neste PC em segundo plano.
+    pub background_replica: bool,
     pub notify_toasts: bool,
     pub notify_join_leave: bool,
     pub journal: JournalSettings,
@@ -50,16 +45,18 @@ impl Default for Config {
         Self {
             player_name: String::new(),
             is_owner: false,
+            coordinator_url: None,
+            world_id: None,
+            world_name: "pAuletOr 3".into(),
             minecraft_dir: default_minecraft_dir(),
             launcher_path: None,
             ram_mb: None,
-            checkpoint_minutes: 15,
+            checkpoint_minutes: 5,
             grace_minutes: 2,
-            remote_root: "pAuletOr3".into(),
-            duckdns_domain: None,
-            address_mode: AddressMode::Duckdns,
-            tailscale_key_expires: None,
-            world_tailnet: None,
+            proxy_port: crate::GAME_PORT,
+            auto_failover: true,
+            wake_on_join: true,
+            background_replica: true,
             notify_toasts: true,
             notify_join_leave: true,
             journal: JournalSettings::default(),
@@ -85,13 +82,18 @@ impl Config {
         crate::util::write_atomic(&paths.config(), &serde_json::to_vec_pretty(self)?)
     }
 
-    /// Endereço que os jogadores usam (o hostname DuckDNS, se configurado).
-    pub fn public_address(&self, host_ip: Option<&str>) -> Option<String> {
-        match (self.address_mode, &self.duckdns_domain, host_ip) {
-            (AddressMode::Duckdns, Some(d), _) => Some(crate::duckdns::fqdn(d)),
-            (_, _, Some(ip)) => Some(ip.to_string()),
-            _ => None,
+    /// Endereço que o jogador usa no Minecraft (sempre o mesmo, em qualquer PC).
+    pub fn game_address(&self) -> String {
+        if self.proxy_port == 25565 {
+            "localhost".into()
+        } else {
+            format!("localhost:{}", self.proxy_port)
         }
+    }
+
+    /// Ligado a um mundo (coordenação + id).
+    pub fn joined(&self) -> bool {
+        self.coordinator_url.is_some() && self.world_id.is_some()
     }
 
     pub fn is_valid_player_name(name: &str) -> bool {
@@ -108,9 +110,13 @@ mod tests {
         assert!(Config::is_valid_player_name("Ana_23"));
         assert!(!Config::is_valid_player_name("Zé"));
         assert!(!Config::is_valid_player_name("ab"));
-        let mut c = Config { duckdns_domain: Some("pauletor3".into()), ..Default::default() };
-        assert_eq!(c.public_address(Some("100.64.0.1")).unwrap(), "pauletor3.duckdns.org");
-        c.address_mode = AddressMode::DirectIp;
-        assert_eq!(c.public_address(Some("100.64.0.1")).unwrap(), "100.64.0.1");
+        let mut c = Config::default();
+        assert_eq!(c.game_address(), "localhost");
+        c.proxy_port = 25570;
+        assert_eq!(c.game_address(), "localhost:25570");
+        // config antiga (v1) ainda abre, com padrões no que falta
+        let old: Config = serde_json::from_str(r#"{"player_name":"Ana","duckdns_domain":"x"}"#).unwrap();
+        assert_eq!(old.player_name, "Ana");
+        assert_eq!(old.checkpoint_minutes, 5);
     }
 }

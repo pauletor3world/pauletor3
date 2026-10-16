@@ -1,5 +1,7 @@
-//! Abstração do armazenamento remoto. O núcleo não conhece o Google Drive: só fala com
-//! "um remote" que sabe ler/gravar arquivos pequenos e transferir objetos em lote.
+//! Abstração do armazenamento da nuvem do mundo. O núcleo só fala com "um remote" que sabe
+//! ler/gravar arquivos e transferir objetos em lote. Implementações: [`CloudRemote`] (o Worker
+//! da coordenação), [`FsRemote`] (pasta local, testes) e [`EncryptedRemote`] (cifra por cima
+//! de qualquer outra com a chave do mundo).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -9,11 +11,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::NmResult;
 
+pub mod cloud;
+pub mod crypt;
 pub mod fs;
-pub mod rclone;
 
+pub use cloud::CloudRemote;
+pub use crypt::EncryptedRemote;
 pub use fs::FsRemote;
-pub use rclone::RcloneRemote;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteEntry {
@@ -60,17 +64,12 @@ pub trait Remote: Send + Sync {
 pub mod layout {
     pub const OBJECTS: &str = "objects";
     pub const MANIFESTS: &str = "manifests";
-    pub const LOCKS: &str = "locks";
-    pub const HEAD: &str = "HEAD.json";
     pub const VERSIONS: &str = "versions.json";
     pub const WORLD_SETTINGS: &str = "world-settings.json";
     pub const STATS: &str = "stats.json";
 
     pub fn manifest(id: &str) -> String {
         format!("{MANIFESTS}/{id}.json")
-    }
-    pub fn lock(session_id: &str) -> String {
-        format!("{LOCKS}/{session_id}.json")
     }
 }
 

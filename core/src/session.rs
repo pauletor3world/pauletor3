@@ -1,8 +1,13 @@
-//! Orquestração: o que acontece quando alguém clica em Jogar, durante a partida e no fim.
+//! Orquestração: o que acontece quando alguém clica em Jogar, durante a partida, quando o host
+//! cai e no fim.
 //!
-//! [`Engine`] é o objeto único que a interface (Tauri) e a CLI usam.
+//! [`Engine`] é o objeto único que a interface (Tauri) e a CLI usam. Além das operações
+//! (jogar, passar a vez, restaurar...), ele mantém um **laço de fundo** enquanto o app está
+//! aberto: conta à coordenação que este PC está online, aponta o proxy local para o host certo,
+//! mantém a réplica do mundo em dia e, se o host cair com este PC jogando, assume sozinho.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,22 +15,26 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::config::{AddressMode, Config};
+use crate::config::Config;
+use crate::coord::http::{ApiClient, HttpCoordinator};
+use crate::coord::{Coordinator, DiaryEvent, Invite as CoordInvite, InviteOptions, LeaseInfo, LeasePurpose, LeaseStatus, Presence, PrivateSettings, Role, WorldView};
 use crate::error::HumanError;
 use crate::events::{Event, EventSink, NoticeLevel, SyncProgress, SyncProgressFn};
 use crate::journal::{self, msg, Journal};
-use crate::lock::{LockConfig, LockGuard, LockInfo, LockManager, LockPurpose, LockStatus, TcpLiveness};
+use crate::lease::{LeaseConfig, LeaseGuard, LeaseManager};
 use crate::logparse::LogEvent;
 use crate::manifest::{ManifestKind, ManifestSummary};
+use crate::p2p::{self, NetMode, Node, PeerObjects};
 use crate::paths::Paths;
-use crate::remote::{RcloneRemote, Remote};
+use crate::proxy::{self, ProxyHandle, Route};
+use crate::remote::{CloudRemote, EncryptedRemote, Remote};
 use crate::secrets::Secrets;
-use crate::server::{LaunchOptions, ServerProcess};
+use crate::server::{LaunchOptions, ServerProcess, WhitelistEntry};
 use crate::stats::{SessionLog, Stats};
-use crate::sync::{ActiveSession, LocalState, PushMeta, SyncEngine};
+use crate::sync::{ActiveSession, LocalState, ObjectSource, PushMeta, SyncEngine};
 use crate::versions::{Versions, WorldSettings};
-use crate::{checkpoint, duckdns, java, launcher, retention, server, serversdat, tailscale, util};
-use crate::{NmError, NmResult, GAME_PORT};
+use crate::{checkpoint, java, launcher, license, retention, server, serversdat, util};
+use crate::{NmError, NmResult, SERVER_PORT};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,26 +57,68 @@ pub enum Phase {
     WaitingTurn,
 }
 
+/// Um membro, do jeito que a interface mostra.
+#[derive(Debug, Clone, Serialize)]
+pub struct MemberView {
+    pub id: String,
+    pub nick: String,
+    pub role: Role,
+    pub approved: bool,
+    pub online: bool,
+    pub playing: bool,
+    pub hosting: bool,
+    pub is_me: bool,
+    pub last_seen: Option<DateTime<Utc>>,
+    /// "direta" / "relay" (como este membro alcança o host).
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NetStatus {
+    pub started: bool,
+    /// Conectado à rede P2P (relay doméstico alcançável).
+    pub online: bool,
+    pub id_short: Option<String>,
+    /// Como este PC alcança o host agora ("direta" / "relay").
+    pub path_to_host: Option<String>,
+    /// Ida e volta até o host (ms).
+    pub rtt_ms: Option<u64>,
+    pub proxy_port: Option<u16>,
+    pub proxy_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
     pub configured: bool,
     pub phase: Phase,
     pub player_name: String,
     pub world_name: String,
-    pub lock: Option<LockStatus>,
+    pub is_owner: bool,
+    pub lease: Option<LeaseStatus>,
     pub me_hosting: bool,
     pub head: Option<ManifestSummary>,
+    pub head_seq: Option<u64>,
+    pub replica_seq: u64,
+    pub replicating: bool,
     pub online: Vec<String>,
+    pub members: Vec<MemberView>,
     pub sync: Option<SyncProgress>,
-    pub address: Option<String>,
+    /// Endereço que o jogador usa no Minecraft (sempre o mesmo).
+    pub address: String,
+    /// O Minecraft deste PC está dentro do mundo agora.
+    pub playing: bool,
     pub host_client_running: bool,
     pub friends_still_playing: bool,
     pub recovery_pending: bool,
+    /// Troca automática de host em andamento (mensagem para a interface).
+    pub failover: Option<String>,
     pub last_error: Option<HumanError>,
     pub session_started_at: Option<DateTime<Utc>>,
     pub next_checkpoint_at: Option<DateTime<Utc>>,
     pub last_checkpoint_at: Option<DateTime<Utc>>,
-    pub remote_ok: bool,
+    /// A coordenação respondeu na última consulta.
+    pub coord_ok: bool,
+    pub net: NetStatus,
     pub refreshed_at: Option<DateTime<Utc>>,
 }
 
@@ -83,11 +134,22 @@ pub enum EndReason {
     Shutdown,
 }
 
+/// Por que um "Jogar" começou.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayTrigger {
+    /// Botão Jogar no app.
+    Button,
+    /// Tentativa de entrar pelo Minecraft com o mundo livre.
+    Wake,
+    /// O host caiu e este PC estava jogando.
+    Failover,
+}
+
 /// Uma sessão hospedada neste PC.
 struct HostSession {
     session_id: String,
     started_at: DateTime<Utc>,
-    guard: LockGuard,
+    guard: LeaseGuard,
     server: Arc<ServerProcess>,
     log: Mutex<SessionLog>,
     stats: Mutex<Stats>,
@@ -96,70 +158,99 @@ struct HostSession {
     last_published: Mutex<Option<String>>,
     base_manifest: Option<String>,
     versions: Versions,
-    client_seen: std::sync::atomic::AtomicBool,
-    ending: std::sync::atomic::AtomicBool,
+    client_seen: AtomicBool,
+    ending: AtomicBool,
     tasks: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>,
+}
+
+/// Coordenação + nuvem prontas para uso.
+#[derive(Clone)]
+pub struct Backend {
+    pub coord: Arc<dyn Coordinator>,
+    pub remote: Arc<dyn Remote>,
+}
+
+struct Net {
+    node: Arc<Node>,
+    proxy: Option<ProxyHandle>,
 }
 
 pub struct Engine {
     pub paths: Paths,
     pub config: RwLock<Config>,
     secrets: RwLock<Secrets>,
-    remote_override: Option<Arc<dyn Remote>>,
-    rclone_bin: PathBuf,
+    backend_override: Option<Backend>,
+    net_mode: NetMode,
     events: EventSink,
     pub journal: Arc<Journal>,
     status: std::sync::RwLock<Status>,
     session: Mutex<Option<Arc<HostSession>>>,
     /// Serializa operações grandes (jogar, restaurar, recuperar...).
     op: Mutex<()>,
-    pub lock_cfg: LockConfig,
+    pub lease_cfg: std::sync::RwLock<LeaseConfig>,
     world_settings: RwLock<Option<WorldSettings>>,
+    net: RwLock<Option<Net>>,
+    view: RwLock<Option<WorldView>>,
+    /// Pedido de acordar o mundo vindo do proxy (alguém tentou entrar).
+    wake_requested: AtomicBool,
+    /// Último momento em que o Minecraft deste PC estava dentro do mundo (para o failover).
+    last_playing: std::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Host alcançável por P2P agora (`session_number`).
+    host_reachable: std::sync::Mutex<Option<u64>>,
+    replicating: AtomicBool,
+    background: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Engine {
-    /// Abre o motor com a config e os segredos deste PC.
-    pub fn open(paths: Paths, rclone_bin: PathBuf, events: EventSink) -> anyhow::Result<Arc<Self>> {
-        Self::build(paths, rclone_bin, events, None)
+    /// Abre o motor com a config e os segredos deste PC (coordenação e nuvem de verdade).
+    pub fn open(paths: Paths, events: EventSink) -> anyhow::Result<Arc<Self>> {
+        Self::build(paths, events, None, NetMode::Public)
     }
 
-    /// Para testes: usa um remote dado em vez do rclone.
-    pub fn with_remote(paths: Paths, remote: Arc<dyn Remote>, events: EventSink) -> anyhow::Result<Arc<Self>> {
-        Self::build(paths, PathBuf::from("rclone"), events, Some(remote))
+    /// Para testes: coordenação e nuvem dadas, rede P2P só local.
+    pub fn with_backend(paths: Paths, backend: Backend, events: EventSink) -> anyhow::Result<Arc<Self>> {
+        Self::build(paths, events, Some(backend), NetMode::LocalOnly)
     }
 
-    fn build(paths: Paths, rclone_bin: PathBuf, events: EventSink, remote: Option<Arc<dyn Remote>>) -> anyhow::Result<Arc<Self>> {
+    fn build(paths: Paths, events: EventSink, backend: Option<Backend>, net_mode: NetMode) -> anyhow::Result<Arc<Self>> {
         paths.ensure()?;
         let config = Config::load(&paths);
-        let secrets = Secrets::load(&paths.secrets()).unwrap_or_else(|e| {
-            tracing::error!(error = %e, "segredos ilegíveis; será preciso configurar de novo");
+        let mut secrets = Secrets::load(&paths.secrets()).unwrap_or_else(|e| {
+            tracing::error!(error = %e, "segredos ilegíveis; será preciso entrar no mundo de novo");
             Secrets::default()
         });
-        let journal = Journal::open(
-            paths.root.join("journal-queue.json"),
-            config.journal.clone(),
-            secrets.discord_webhook.clone(),
-            "pAuletOr 3",
-        );
+        if secrets.identity().is_none() {
+            secrets.identity_key = Some(hex::encode(p2p::new_secret()));
+            secrets.save(&paths.secrets())?;
+        }
+        let journal = Journal::open(paths.root.join("journal-queue.json"), config.journal.clone(), None, &config.world_name);
         let status = Status {
             configured: config.setup_complete,
             phase: Phase::Idle,
             player_name: config.player_name.clone(),
-            world_name: "pAuletOr 3".into(),
-            lock: None,
+            world_name: config.world_name.clone(),
+            is_owner: config.is_owner,
+            lease: None,
             me_hosting: false,
             head: None,
+            head_seq: None,
+            replica_seq: LocalState::load(&paths).replica.map(|r| r.seq).unwrap_or(0),
+            replicating: false,
             online: vec![],
+            members: vec![],
             sync: None,
-            address: config.public_address(None),
+            address: config.game_address(),
+            playing: false,
             host_client_running: false,
             friends_still_playing: false,
             recovery_pending: LocalState::load(&paths).dirty,
+            failover: None,
             last_error: None,
             session_started_at: None,
             next_checkpoint_at: None,
             last_checkpoint_at: None,
-            remote_ok: false,
+            coord_ok: false,
+            net: NetStatus::default(),
             refreshed_at: None,
         };
         let _ = crate::sync::repair_interrupted_swap(&paths);
@@ -167,15 +258,22 @@ impl Engine {
             paths,
             config: RwLock::new(config),
             secrets: RwLock::new(secrets),
-            remote_override: remote,
-            rclone_bin,
+            backend_override: backend,
+            net_mode,
             events,
             journal,
             status: std::sync::RwLock::new(status),
             session: Mutex::new(None),
             op: Mutex::new(()),
-            lock_cfg: LockConfig::default(),
+            lease_cfg: std::sync::RwLock::new(LeaseConfig::default()),
             world_settings: RwLock::new(None),
+            net: RwLock::new(None),
+            view: RwLock::new(None),
+            wake_requested: AtomicBool::new(false),
+            last_playing: std::sync::Mutex::new(None),
+            host_reachable: std::sync::Mutex::new(None),
+            replicating: AtomicBool::new(false),
+            background: std::sync::Mutex::new(None),
         }))
     }
 
@@ -221,7 +319,6 @@ impl Engine {
         let mut s = self.secrets.write().await;
         f(&mut s);
         s.save(&self.paths.secrets())?;
-        self.journal.set_webhook(s.discord_webhook.clone());
         Ok(())
     }
 
@@ -235,57 +332,92 @@ impl Engine {
         self.set_status(|s| {
             s.configured = c2.setup_complete;
             s.player_name = c2.player_name.clone();
+            s.world_name = c2.world_name.clone();
+            s.is_owner = c2.is_owner;
+            s.address = c2.game_address();
         });
         Ok(c2)
     }
 
-    pub fn rclone_config_path(&self) -> PathBuf {
-        self.paths.root.join("rclone.conf")
+    /// Identidade deste app (chave pública, hex).
+    pub async fn my_id(&self) -> String {
+        let s = self.secrets.read().await;
+        p2p::public_hex(&s.identity().expect("identidade criada no build"))
     }
 
-    pub fn rclone_bin(&self) -> &PathBuf {
-        &self.rclone_bin
-    }
-
-    /// O remote configurado.
-    pub async fn remote(&self) -> NmResult<Arc<dyn Remote>> {
-        if let Some(r) = &self.remote_override {
-            return Ok(r.clone());
+    /// Coordenação + nuvem (cifrada com a chave do mundo).
+    pub async fn backend(&self) -> NmResult<Backend> {
+        if let Some(b) = &self.backend_override {
+            return Ok(b.clone());
         }
-        let pass = self
-            .secrets
-            .read()
-            .await
-            .rclone_config_pass
-            .clone()
-            .ok_or_else(|| NmError::NotConfigured("nuvem não conectada".into()))?;
         let cfg = self.config.read().await;
-        Ok(Arc::new(RcloneRemote::new(
-            self.rclone_bin.clone(),
-            self.rclone_config_path(),
-            zeroize::Zeroizing::new(pass),
-            &cfg.remote_root,
-            self.paths.tmp(),
-        )))
+        let (Some(url), Some(world)) = (cfg.coordinator_url.clone(), cfg.world_id.clone()) else {
+            return Err(NmError::NotConfigured("este PC ainda não entrou em nenhum mundo".into()));
+        };
+        drop(cfg);
+        let s = self.secrets.read().await;
+        let id = s.identity().ok_or_else(|| NmError::NotConfigured("identidade do app ausente".into()))?;
+        let key = s.world().ok_or_else(|| NmError::NotConfigured("chave do mundo ausente; entre de novo pelo convite".into()))?;
+        drop(s);
+        let api = ApiClient::new(&url, &world, id)?;
+        let coord: Arc<dyn Coordinator> = Arc::new(HttpCoordinator::new(api.clone()));
+        let remote: Arc<dyn Remote> = Arc::new(EncryptedRemote::new(Arc::new(CloudRemote::new(api)), key, self.paths.tmp()));
+        Ok(Backend { coord, remote })
     }
 
     async fn sync_engine(&self) -> NmResult<SyncEngine> {
-        Ok(SyncEngine::new(self.remote().await?, self.paths.clone()))
+        let b = self.backend().await?;
+        let peers = self.peer_source(true).await;
+        Ok(SyncEngine::new(b.remote, b.coord, self.paths.clone()).with_peers(peers))
     }
 
-    async fn lock_manager(&self) -> NmResult<LockManager> {
-        Ok(LockManager::new(
-            self.remote().await?,
-            Arc::new(TcpLiveness { port: GAME_PORT, timeout: Duration::from_secs(4) }),
-            self.lock_cfg.clone(),
-        ))
+    async fn lease_manager(&self) -> NmResult<LeaseManager> {
+        Ok(LeaseManager::new(self.backend().await?.coord, self.lease_cfg.read().unwrap().clone()))
+    }
+
+    pub async fn node(&self) -> Option<Arc<Node>> {
+        self.net.read().await.as_ref().map(|n| n.node.clone())
+    }
+
+    async fn set_route(&self, r: Route) {
+        if let Some(Net { proxy: Some(p), .. }) = self.net.read().await.as_ref() {
+            p.set_route(r);
+        }
+    }
+
+    pub async fn proxy_addr(&self) -> Option<std::net::SocketAddr> {
+        self.net.read().await.as_ref().and_then(|n| n.proxy.as_ref().map(|p| p.addr))
+    }
+
+    /// Amigos online (pela última fotografia da coordenação) como fonte de objetos P2P,
+    /// o host primeiro e depois quem tem a réplica mais nova.
+    async fn peer_source(&self, exclude_me: bool) -> Option<Arc<dyn ObjectSource>> {
+        let node = self.node().await?;
+        let view = self.view.read().await.clone()?;
+        let me = node.id_hex();
+        let host = view.lease.held().map(|l| l.holder.clone());
+        let mut cands: Vec<(bool, u64, iroh::EndpointAddr)> = view
+            .members
+            .iter()
+            .filter(|m| m.approved && !(exclude_me && m.id == me))
+            .filter_map(|m| {
+                let p = m.presence.as_ref()?;
+                let addr = p2p::parse_addr(p.endpoint.as_deref()?).ok()?;
+                Some((Some(&m.id) == host.as_ref(), p.replica_seq, addr))
+            })
+            .collect();
+        cands.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+        if cands.is_empty() {
+            return None;
+        }
+        Some(Arc::new(PeerObjects { node, peers: cands.into_iter().map(|c| c.2).collect() }))
     }
 
     pub async fn world_settings(&self) -> NmResult<WorldSettings> {
         if let Some(w) = self.world_settings.read().await.clone() {
             return Ok(w);
         }
-        let r = self.remote().await?;
+        let r = self.backend().await?.remote;
         let w = WorldSettings::load(&*r).await?.unwrap_or_default();
         *self.world_settings.write().await = Some(w.clone());
         Ok(w)
@@ -293,99 +425,498 @@ impl Engine {
 
     /// Muda as configurações do mundo (só com ninguém hospedando).
     pub async fn save_world_settings(&self, w: WorldSettings) -> NmResult<()> {
-        let lm = self.lock_manager().await?;
-        if !matches!(lm.status().await?, LockStatus::Free) {
+        let lm = self.lease_manager().await?;
+        if !lm.status().await?.is_free() {
             return Err(NmError::Other(anyhow::anyhow!("só dá para mudar com ninguém hospedando")));
         }
-        let r = self.remote().await?;
+        let r = self.backend().await?.remote;
         w.save(&*r).await?;
         self.journal.set_world_name(&w.world_name);
         *self.world_settings.write().await = Some(w.clone());
-        self.set_status(|s| s.world_name = w.world_name.clone());
+        let _ = self.update_config(|c| c.world_name = w.world_name.clone()).await;
         Ok(())
     }
 
-    // ------------------------------------------------------------------ estado (amigos)
+    // ------------------------------------------------------------------ mundo: criar e entrar
 
-    /// Relê a trava e o HEAD do remote. Barato: chamado a cada ~20 s pela interface.
-    pub async fn refresh(self: &Arc<Self>) -> NmResult<()> {
-        let remote = match self.remote().await {
-            Ok(r) => r,
-            Err(e) => {
-                self.set_status(|s| s.remote_ok = false);
-                return Err(e);
-            }
-        };
-        let lm = self.lock_manager().await?;
-        let lock = match lm.status().await {
-            Ok(l) => l,
-            Err(e) => {
-                self.set_status(|s| s.remote_ok = false);
-                return Err(e);
-            }
-        };
-        let se = SyncEngine::new(remote.clone(), self.paths.clone());
-        let head = match se.head().await? {
-            Some(h) => se.fetch_manifest(&h.manifest).await.ok().map(|m| m.summary()),
-            None => None,
-        };
-        if self.world_settings.read().await.is_none() {
-            if let Ok(Some(w)) = WorldSettings::load(&*remote).await {
-                self.journal.set_world_name(&w.world_name);
-                self.set_status(|s| s.world_name = w.world_name.clone());
-                *self.world_settings.write().await = Some(w);
+    /// O dono cria o mundo na coordenação dele. Se `folder` vier, importa esse mundo.
+    pub async fn create_world(self: &Arc<Self>, coordinator_url: &str, admin_token: &str, name: &str, nick: &str, folder: Option<PathBuf>) -> NmResult<()> {
+        if !Config::is_valid_player_name(nick) {
+            return Err(NmError::Other(anyhow::anyhow!("nick inválido (3 a 16 letras, números ou _)")));
+        }
+        let id = self.secrets.read().await.identity().expect("identidade");
+        let lic = license::AdminTokenLicense { admin_token: Some(admin_token.to_string()) };
+        let cred = license::License::create_world_credential(&lic).unwrap_or_default();
+        let world_id = crate::coord::http::create_world(coordinator_url, id, &cred, name, nick).await?;
+        let key = p2p::new_secret();
+        self.update_secrets(|s| {
+            s.world_key = Some(hex::encode(key));
+            s.admin_token = Some(admin_token.to_string());
+        })
+        .await?;
+        self.update_config(|c| {
+            c.coordinator_url = Some(coordinator_url.trim_end_matches('/').to_string());
+            c.world_id = Some(world_id.clone());
+            c.world_name = name.to_string();
+            c.player_name = nick.to_string();
+            c.is_owner = true;
+            c.setup_complete = true;
+        })
+        .await?;
+        // versões e configurações do mundo
+        let b = self.backend().await?;
+        if Versions::load(&*b.remote).await?.is_none() {
+            Versions::builtin().save(&*b.remote).await?;
+        }
+        let ws = WorldSettings { world_name: name.to_string(), ..Default::default() };
+        if WorldSettings::load(&*b.remote).await?.is_none() {
+            ws.save(&*b.remote).await?;
+        }
+        if let Some(f) = folder {
+            self.import_world(f).await?;
+        }
+        let _ = self.refresh().await;
+        Ok(())
+    }
+
+    /// Um amigo entra pelo convite (link ou código). Sem conta, sem senha.
+    pub async fn join_world(self: &Arc<Self>, invite: &str, nick: &str) -> NmResult<crate::coord::http::JoinResult> {
+        if !Config::is_valid_player_name(nick) {
+            return Err(NmError::Other(anyhow::anyhow!("nick inválido (3 a 16 letras, números ou _)")));
+        }
+        let inv = crate::invite::Invite::parse(invite).map_err(|e| NmError::Other(e.into()))?;
+        let id = self.secrets.read().await.identity().expect("identidade");
+        let r = crate::coord::http::redeem_invite(&inv.base, id, &inv.token, nick).await?;
+        let key = inv.world_key().map_err(|e| NmError::Other(e.into()))?;
+        self.update_secrets(|s| s.world_key = Some(hex::encode(*key))).await?;
+        self.update_config(|c| {
+            c.coordinator_url = Some(inv.base.clone());
+            c.world_id = Some(r.world_id.clone());
+            c.world_name = r.name.clone();
+            c.player_name = nick.to_string();
+            c.is_owner = false;
+            c.setup_complete = true;
+        })
+        .await?;
+        let _ = self.refresh().await;
+        Ok(r)
+    }
+
+    /// Link de convite novo (só o dono).
+    pub async fn create_invite(&self, opts: InviteOptions) -> NmResult<(CoordInvite, String)> {
+        let b = self.backend().await?;
+        let inv = b.coord.create_invite(&opts).await?;
+        let token = inv.token.clone().ok_or_else(|| NmError::Remote("convite sem token".into()))?;
+        let key = self.secrets.read().await.world().ok_or_else(|| NmError::NotConfigured("chave do mundo ausente".into()))?;
+        let url = self.config.read().await.coordinator_url.clone().unwrap_or_default();
+        let link = crate::invite::Invite::new(&url, &token, &key).link();
+        Ok((inv, link))
+    }
+
+    pub async fn invites(&self) -> NmResult<Vec<CoordInvite>> {
+        self.backend().await?.coord.invites().await
+    }
+
+    pub async fn revoke_invite(&self, id: &str) -> NmResult<()> {
+        self.backend().await?.coord.revoke_invite(id).await
+    }
+
+    pub async fn set_member(self: &Arc<Self>, id: &str, approved: Option<bool>, remove: bool) -> NmResult<()> {
+        self.backend().await?.coord.set_member(id, approved, remove).await?;
+        let _ = self.refresh().await;
+        Ok(())
+    }
+
+    pub async fn private_settings(&self) -> NmResult<PrivateSettings> {
+        self.backend().await?.coord.private_settings().await
+    }
+
+    pub async fn set_private_settings(&self, s: PrivateSettings) -> NmResult<()> {
+        if let Some(w) = &s.discord_webhook {
+            if !w.is_empty() && !journal::is_valid_webhook(w) {
+                return Err(NmError::Other(anyhow::anyhow!("isso não parece um webhook do Discord")));
             }
         }
-        let me_hosting = self.session.lock().await.is_some();
-        let prev = self.status();
+        self.backend().await?.coord.set_private_settings(&s).await?;
+        if self.is_hosting().await {
+            self.journal.set_webhook(s.discord_webhook.clone());
+        }
+        Ok(())
+    }
+
+    /// Diário do mundo (dentro do app), do mais novo para o mais velho.
+    pub async fn diary(&self, limit: usize) -> NmResult<Vec<DiaryEvent>> {
+        self.backend().await?.coord.events(limit).await
+    }
+
+    fn diary_post(self: &Arc<Self>, kind: &str, player: Option<&str>, text: String) {
+        let me = self.clone();
+        let ev = DiaryEvent { at: Utc::now(), kind: kind.into(), player: player.map(str::to_string), text };
+        tokio::spawn(async move {
+            if let Ok(b) = me.backend().await {
+                if let Err(e) = b.coord.post_events(&[ev]).await {
+                    tracing::debug!(error = %e, "evento do diário não enviado");
+                }
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------ rede e laço de fundo
+
+    /// Liga a rede P2P e o proxy local e começa o laço de fundo. Chamado ao abrir o app
+    /// (depois que o PC entrou num mundo). Idempotente.
+    pub async fn start_network(self: &Arc<Self>) -> NmResult<()> {
+        if self.net.read().await.is_some() {
+            return Ok(());
+        }
+        let secret = self.secrets.read().await.identity().expect("identidade");
+        let node = Node::start(&secret, self.net_mode, &self.paths).await.map_err(|e| NmError::P2p(format!("{e:#}")))?;
+        let port = if self.backend_override.is_some() { 0 } else { self.config.read().await.proxy_port };
+        let wake_me = Arc::downgrade(self);
+        let unreachable_me = Arc::downgrade(self);
+        let proxy = match proxy::start(
+            port,
+            Some(node.clone()),
+            Arc::new(move || {
+                if let Some(me) = wake_me.upgrade() {
+                    me.wake_requested.store(true, Ordering::SeqCst);
+                }
+            }),
+            Arc::new(move || {
+                if let Some(me) = unreachable_me.upgrade() {
+                    *me.host_reachable.lock().unwrap() = None;
+                }
+            }),
+        )
+        .await
+        {
+            Ok(p) => {
+                let a = p.addr;
+                self.set_status(|s| {
+                    s.net.proxy_port = Some(a.port());
+                    s.net.proxy_error = None;
+                });
+                Some(p)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "proxy local não abriu");
+                self.set_status(|s| s.net.proxy_error = Some(format!("{e:#}")));
+                None
+            }
+        };
+        let id_short = node.endpoint.id().fmt_short().to_string();
+        self.set_status(|s| {
+            s.net.started = true;
+            s.net.id_short = Some(id_short);
+        });
+        *self.net.write().await = Some(Net { node, proxy });
+        let me = self.clone();
+        let h = tokio::spawn(async move { me.background_loop().await });
+        *self.background.lock().unwrap() = Some(h);
+        Ok(())
+    }
+
+    /// Para o laço de fundo e a rede (ao sair do app).
+    pub async fn stop_network(&self) {
+        if let Some(h) = self.background.lock().unwrap().take() {
+            h.abort();
+        }
+        if let Some(n) = self.net.write().await.take() {
+            n.node.shutdown().await;
+        }
+    }
+
+    async fn background_loop(self: Arc<Self>) {
+        let mut tick: u64 = 0;
+        loop {
+            tick += 1;
+            if let Err(e) = self.tick(tick).await {
+                tracing::debug!(error = %e, "ciclo de fundo com erro");
+            }
+            let busy = self.is_hosting().await
+                || self.status().playing
+                || matches!(self.status().lease, Some(LeaseStatus::Held { .. }))
+                || self.status().failover.is_some();
+            let wait = if busy { 4 } else { 20 };
+            for _ in 0..(wait * 4) {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if self.wake_requested.load(Ordering::SeqCst) {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Um ciclo do laço de fundo. Uma única ida à coordenação: a presença leva o que este PC
+    /// sabe e volta com a fotografia do mundo.
+    async fn tick(self: &Arc<Self>, n: u64) -> NmResult<()> {
         let cfg = self.config.read().await.clone();
-
-        // Avisos para quem não está hospedando.
-        if !me_hosting && cfg.notify_toasts {
-            self.toast_changes(prev.lock.as_ref(), &lock, &cfg);
+        if !cfg.setup_complete {
+            return Ok(());
         }
+        let Some(node) = self.node().await else { return Ok(()) };
+        let me = node.id_hex();
+        let hosting = self.is_hosting().await;
 
-        // Fallback de endereço: reescreve o servers.dat com o IP do host (com o Minecraft fechado).
-        if let (AddressMode::DirectIp, LockStatus::Held { lock: l }, Some(mc)) = (cfg.address_mode, &lock, &cfg.minecraft_dir) {
-            if let Some(ip) = &l.tailscale_ip {
-                if !launcher::client_running(None) {
-                    if let Err(e) = serversdat::ensure_entry(mc, ip, &self.paths.backups()) {
-                        tracing::warn!(error = %e, "não consegui atualizar o servers.dat");
+        // 1) o Minecraft deste PC está jogando?
+        // `PAULETOR3_PRETEND_PLAYING=1`: só para o teste automático de failover (sem cliente de jogo).
+        let pretend = std::env::var_os("PAULETOR3_PRETEND_PLAYING").is_some();
+        let playing = pretend || self.net.read().await.as_ref().and_then(|n| n.proxy.as_ref().map(|p| p.playing())).unwrap_or(false);
+        if playing {
+            *self.last_playing.lock().unwrap() = Some(tokio::time::Instant::now());
+        }
+        let recently_playing = self
+            .last_playing
+            .lock()
+            .unwrap()
+            .map(|t| t.elapsed() < Duration::from_secs(150))
+            .unwrap_or(false);
+
+        // 2) o host (pela última fotografia) responde por P2P? O aviso mantém a vez viva se só
+        //    a internet do host com a nuvem caiu.
+        let prev_view = self.view.read().await.clone();
+        let mut path = None;
+        let mut rtt = None;
+        match prev_view.as_ref().and_then(|v| v.lease.held().cloned()) {
+            Some(l) if l.holder != me && l.purpose == LeasePurpose::Hosting => {
+                let reach = match l.endpoint.as_deref().map(p2p::parse_addr) {
+                    Some(Ok(addr)) if playing || n % 3 == 0 || self.host_reachable.lock().unwrap().is_none() => match node.ping(&addr).await {
+                        Ok(d) => {
+                            rtt = Some(d.as_millis() as u64);
+                            true
+                        }
+                        Err(_) => false,
+                    },
+                    Some(Ok(_)) => self.host_reachable.lock().unwrap().is_some(),
+                    _ => false,
+                };
+                *self.host_reachable.lock().unwrap() = reach.then_some(l.session_number);
+                if let Ok(id) = p2p::parse_id(&l.holder) {
+                    path = node.path_kind(&id).await.map(str::to_string);
+                }
+            }
+            _ => *self.host_reachable.lock().unwrap() = None,
+        }
+        let online = node.wait_online(Duration::from_millis(1)).await;
+        self.set_status(|s| {
+            s.playing = playing;
+            s.net.online = online || self.net_mode == NetMode::LocalOnly;
+            s.net.path_to_host = path.clone();
+            s.net.rtt_ms = rtt;
+        });
+
+        // 3) presença → fotografia do mundo
+        let presence = Presence {
+            endpoint: Some(node.addr_json()),
+            replica_seq: LocalState::load(&self.paths).replica.map(|r| r.seq).unwrap_or(0),
+            playing,
+            host_reachable: *self.host_reachable.lock().unwrap(),
+            app_version: crate::APP_VERSION.to_string(),
+            path,
+        };
+        let view = match async { self.backend().await?.coord.presence(&presence).await }.await {
+            Ok(v) => v,
+            Err(e) => {
+                self.set_status(|s| s.coord_ok = false);
+                if !hosting {
+                    self.set_route(Route::Waiting {
+                        motd: "§cSem conexão com a nuvem do mundo §7— confira a internet".into(),
+                        message: "O app não está conseguindo falar com a nuvem do mundo.\n\nConfira a internet e tente de novo.".into(),
+                        wake: false,
+                    })
+                    .await;
+                }
+                return Err(e);
+            }
+        };
+        self.apply_view(view.clone()).await?;
+
+        // 4) quem pode falar comigo por P2P
+        node.set_members(view.members.iter().filter(|m| m.approved && m.id != me).map(|m| m.id.as_str()));
+
+        // 6) rota do proxy
+        if hosting {
+            self.set_route(Route::Local(SERVER_PORT)).await;
+        } else {
+            match &view.lease {
+                LeaseStatus::Held { lease } if lease.holder != me && lease.purpose == LeasePurpose::Hosting => match lease.endpoint.as_deref().map(p2p::parse_addr) {
+                    Some(Ok(addr)) => self.set_route(Route::Remote(addr)).await,
+                    _ => self.set_route(waiting(&format!("§e{} está abrindo o mundo...", lease.player), "O mundo está abrindo. Entre de novo em alguns segundos.", false)).await,
+                },
+                LeaseStatus::Held { lease } if lease.purpose == LeasePurpose::Maintenance => {
+                    self.set_route(waiting(&format!("§e{} está mexendo no mundo §7(manutenção)", lease.player), "Manutenção do mundo em andamento. Tente de novo em alguns minutos.", false)).await
+                }
+                LeaseStatus::Held { .. } => {}
+                LeaseStatus::Free { previous: Some(prev) } if prev.purpose == LeasePurpose::Hosting && recently_playing => {
+                    self.set_route(waiting("§eTrocando de host... §7não feche o jogo", "Trocando de host...\n\nEntre de novo em alguns segundos: o mundo continua de onde parou.", false)).await
+                }
+                LeaseStatus::Free { .. } => {
+                    let phase = self.status().phase;
+                    if matches!(phase, Phase::Preparing | Phase::Starting) {
+                        let pct = self.status().sync.map(|s| s.percent()).unwrap_or(0.0);
+                        self.set_route(waiting(&format!("§eAcordando o mundo no seu PC... §f{pct:.0}%"), "Acordando o mundo...\n\nEntre de novo em alguns segundos.", false)).await;
+                    } else {
+                        self.set_route(Route::Waiting {
+                            motd: if cfg.wake_on_join { "§aMundo livre §7— entre para acordar o mundo".into() } else { "§aMundo livre §7— abra pelo app".into() },
+                            message: "Acordando o mundo no seu PC...\n\nEntre de novo em alguns segundos.".into(),
+                            wake: cfg.wake_on_join,
+                        })
+                        .await;
                     }
                 }
             }
         }
 
-        let online = match &lock {
-            LockStatus::Held { lock } => lock.online.clone(),
+        // 7) failover automático e acordar
+        let free = view.lease.is_free();
+        let idle = self.status().phase == Phase::Idle && !hosting;
+        if free && idle {
+            let host_fell = matches!(&view.lease, LeaseStatus::Free { previous: Some(p) } if p.holder != me && p.purpose == LeasePurpose::Hosting);
+            let wake = self.wake_requested.swap(false, Ordering::SeqCst);
+            let trigger = if host_fell && recently_playing && cfg.auto_failover {
+                Some(PlayTrigger::Failover)
+            } else if wake && cfg.wake_on_join {
+                Some(PlayTrigger::Wake)
+            } else {
+                None
+            };
+            if let Some(t) = trigger {
+                let me2 = self.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = me2.play_with(t, false).await {
+                        tracing::warn!(error = %e, trigger = ?t, "não assumi o mundo");
+                    }
+                });
+                return Ok(());
+            }
+        } else {
+            self.wake_requested.store(false, Ordering::SeqCst);
+        }
+
+        // 8) réplica em segundo plano (sem hospedar, com o mundo publicado mais novo que o meu)
+        if cfg.background_replica && !hosting && idle {
+            if let Some(h) = &view.head {
+                if h.seq > presence.replica_seq && !self.replicating.swap(true, Ordering::SeqCst) {
+                    let me2 = self.clone();
+                    tokio::spawn(async move {
+                        me2.set_status(|s| s.replicating = true);
+                        let r = async {
+                            let se = me2.sync_engine().await?;
+                            se.prefetch(crate::events::quiet()).await
+                        }
+                        .await;
+                        if let Err(e) = r {
+                            tracing::info!(error = %e, "réplica em segundo plano adiada");
+                        }
+                        let seq = LocalState::load(&me2.paths).replica.map(|r| r.seq).unwrap_or(0);
+                        me2.set_status(|s| {
+                            s.replicating = false;
+                            s.replica_seq = seq;
+                        });
+                        me2.replicating.store(false, Ordering::SeqCst);
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------ estado
+
+    /// Relê o estado do mundo na coordenação. Barato.
+    pub async fn refresh(self: &Arc<Self>) -> NmResult<()> {
+        let view = match async { self.backend().await?.coord.view().await }.await {
+            Ok(v) => v,
+            Err(e) => {
+                self.set_status(|s| s.coord_ok = false);
+                return Err(e);
+            }
+        };
+        self.apply_view(view).await
+    }
+
+    /// Atualiza o status da interface a partir de uma fotografia da coordenação.
+    async fn apply_view(self: &Arc<Self>, view: WorldView) -> NmResult<()> {
+        let b = self.backend().await?;
+        let head_summary = match &view.head {
+            Some(h) => {
+                let se = SyncEngine::new(b.remote.clone(), b.coord.clone(), self.paths.clone()).with_peers(self.peer_source(true).await);
+                se.fetch_manifest(&h.manifest).await.ok().map(|m| m.summary())
+            }
+            None => None,
+        };
+        if self.world_settings.read().await.is_none() {
+            if let Ok(Some(w)) = WorldSettings::load(&*b.remote).await {
+                self.journal.set_world_name(&w.world_name);
+                *self.world_settings.write().await = Some(w);
+            }
+        }
+        let me_hosting = self.session.lock().await.is_some();
+        let prev = self.view.read().await.clone();
+        let cfg = self.config.read().await.clone();
+        if !me_hosting && cfg.notify_toasts {
+            self.toast_changes(prev.as_ref().map(|v| &v.lease), &view.lease, &cfg);
+        }
+        let me = b.coord.me();
+        let host = view.lease.held().map(|l| l.holder.clone());
+        let members: Vec<MemberView> = view
+            .members
+            .iter()
+            .map(|m| MemberView {
+                id: m.id.clone(),
+                nick: m.nick.clone(),
+                role: m.role,
+                approved: m.approved,
+                online: m.presence.is_some(),
+                playing: m.presence.as_ref().map(|p| p.playing).unwrap_or(false),
+                hosting: Some(&m.id) == host.as_ref(),
+                is_me: m.id == me,
+                last_seen: m.last_seen,
+                path: m.presence.as_ref().and_then(|p| p.path.clone()),
+            })
+            .collect();
+        let online = match &view.lease {
+            LeaseStatus::Held { lease } => lease.online.clone(),
             _ => vec![],
         };
-        let address = match &lock {
-            LockStatus::Held { lock } => lock.address.clone().or_else(|| cfg.public_address(lock.tailscale_ip.as_deref())),
-            _ => cfg.public_address(None),
+        let failover = match &view.lease {
+            LeaseStatus::Free { previous: Some(p) } if p.purpose == LeasePurpose::Hosting && p.holder != me => {
+                Some(format!("{} saiu de repente. Trocando de host...", p.player))
+            }
+            _ => None,
         };
+        let is_owner = view.me.as_ref().map(|m| m.role == Role::Owner).unwrap_or(cfg.is_owner);
+        if view.name != cfg.world_name && !view.name.is_empty() {
+            let n = view.name.clone();
+            let _ = self.update_config(|c| c.world_name = n).await;
+        }
         self.set_status(|s| {
             if !me_hosting {
                 s.online = online;
             }
-            s.lock = Some(lock);
-            s.head = head;
-            s.address = address;
+            s.lease = Some(view.lease.clone());
+            s.head = head_summary;
+            s.head_seq = view.head.as_ref().map(|h| h.seq);
+            s.members = members;
+            s.failover = if me_hosting { None } else { failover };
             s.me_hosting = me_hosting;
-            s.remote_ok = true;
+            s.is_owner = is_owner;
+            s.coord_ok = true;
             s.refreshed_at = Some(Utc::now());
             s.recovery_pending = LocalState::load(&self.paths).dirty;
+            s.replica_seq = LocalState::load(&self.paths).replica.map(|r| r.seq).unwrap_or(0);
         });
+        *self.view.write().await = Some(view);
         Ok(())
     }
 
-    fn toast_changes(&self, prev: Option<&LockStatus>, now: &LockStatus, cfg: &Config) {
+    fn toast_changes(&self, prev: Option<&LeaseStatus>, now: &LeaseStatus, cfg: &Config) {
         let Some(prev) = prev else { return };
         match (prev, now) {
-            (LockStatus::Free, LockStatus::Held { lock }) => {
-                self.notice(NoticeLevel::Info, &format!("{} abriu o mundo", lock.player), "Entre pelo Multiplayer → pAuletOr 3.")
+            (LeaseStatus::Free { .. }, LeaseStatus::Held { lease }) if lease.purpose == LeasePurpose::Hosting => {
+                self.notice(NoticeLevel::Info, &format!("{} abriu o mundo", lease.player), "Clique em Jogar para entrar.")
             }
-            (LockStatus::Held { lock: a }, LockStatus::Held { lock: b }) if a.session_id == b.session_id => {
+            (LeaseStatus::Held { lease: a }, LeaseStatus::Held { lease: b }) if a.session_number == b.session_number => {
                 if cfg.notify_join_leave {
                     for p in b.online.iter().filter(|p| !a.online.contains(p) && **p != cfg.player_name) {
                         self.notice(NoticeLevel::Info, &format!("{p} entrou no mundo"), "");
@@ -395,13 +926,16 @@ impl Engine {
                     self.notice(NoticeLevel::Warning, &format!("{} vai passar a vez", b.player), "Clique em Assumir agora para continuar no seu PC.");
                 }
             }
-            (LockStatus::Held { lock }, LockStatus::Free) => {
-                self.notice(NoticeLevel::Success, "Mundo salvo", &format!("A sessão de {} terminou e o mundo está na nuvem.", lock.player))
+            (LeaseStatus::Held { lease: a }, LeaseStatus::Held { lease: b }) if a.purpose == LeasePurpose::Hosting => {
+                self.notice(NoticeLevel::Info, &format!("{} assumiu o mundo", b.player), "Entre de novo pelo Minecraft: o endereço é o mesmo.")
             }
-            (_, LockStatus::Stale { lock }) if !matches!(prev, LockStatus::Stale { .. }) => self.notice(
+            (LeaseStatus::Held { lease }, LeaseStatus::Free { previous: None }) if lease.purpose == LeasePurpose::Hosting => {
+                self.notice(NoticeLevel::Success, "Mundo salvo", &format!("A sessão de {} terminou e o mundo está guardado.", lease.player))
+            }
+            (LeaseStatus::Held { lease }, LeaseStatus::Free { previous: Some(_) }) if lease.purpose == LeasePurpose::Hosting => self.notice(
                 NoticeLevel::Warning,
-                &format!("A sessão de {} parece ter caído", lock.player),
-                "Você pode assumir o mundo pelo app.",
+                &format!("A sessão de {} caiu", lease.player),
+                "Quem estava jogando assume sozinho. Se ninguém estava, o mundo está guardado no último salvamento.",
             ),
             _ => {}
         }
@@ -409,30 +943,53 @@ impl Engine {
 
     // ------------------------------------------------------------------ jogar
 
-    /// Clique em "Jogar": pega a vez, baixa o mundo, sobe o servidor, avisa todo mundo.
-    /// `takeover` = sessões velhas que o usuário confirmou assumir.
-    pub async fn play(self: &Arc<Self>, takeover: Vec<String>, open_game: bool) -> NmResult<()> {
+    /// Clique em "Jogar". Se alguém já hospeda, só abre o jogo (o proxy leva até o host);
+    /// se o mundo está livre, acorda o servidor neste PC.
+    pub async fn play(self: &Arc<Self>, open_game: bool) -> NmResult<()> {
+        let _ = self.refresh().await;
+        let held_by_other = {
+            let me = self.my_id().await;
+            matches!(self.status().lease, Some(LeaseStatus::Held { ref lease }) if lease.holder != me)
+        };
+        if held_by_other {
+            self.open_game().await;
+            return Ok(());
+        }
+        self.play_with(PlayTrigger::Button, open_game).await
+    }
+
+    pub async fn play_with(self: &Arc<Self>, trigger: PlayTrigger, open_game: bool) -> NmResult<()> {
         let _op = self.op.try_lock().map_err(|_| NmError::Other(anyhow::anyhow!("já tem uma operação em andamento")))?;
         if self.session.lock().await.is_some() {
-            return Err(NmError::Other(anyhow::anyhow!("você já está hospedando")));
+            if open_game {
+                self.open_game().await;
+            }
+            return Ok(());
         }
         self.set_status(|s| s.last_error = None);
-        let res = self.play_inner(takeover, open_game).await;
+        if trigger == PlayTrigger::Failover {
+            self.set_status(|s| s.failover = Some("Trocando de host: este PC está assumindo o mundo...".into()));
+        }
+        let res = self.play_inner(trigger, open_game).await;
         if let Err(e) = &res {
+            let quiet = trigger != PlayTrigger::Button && matches!(e, NmError::HeldBy(_) | NmError::NotBestCandidate { .. });
             let h = e.human();
             self.set_status(|s| {
-                s.last_error = Some(h);
+                if !quiet {
+                    s.last_error = Some(h);
+                }
                 s.phase = Phase::Idle;
                 s.sync = None;
+                s.failover = None;
             });
         }
         res
     }
 
-    async fn play_inner(self: &Arc<Self>, takeover: Vec<String>, open_game: bool) -> NmResult<()> {
+    async fn play_inner(self: &Arc<Self>, trigger: PlayTrigger, open_game: bool) -> NmResult<()> {
         let cfg = self.config.read().await.clone();
         if !cfg.setup_complete {
-            return Err(NmError::NotConfigured("termine o assistente primeiro".into()));
+            return Err(NmError::NotConfigured("termine a configuração primeiro".into()));
         }
         if !cfg.eula_accepted {
             return Err(NmError::NotConfigured("aceite o EULA do Minecraft nas configurações".into()));
@@ -444,29 +1001,15 @@ impl Engine {
             self.recover().await?;
             self.phase(Phase::Preparing);
         }
-
-        // Este PC pode estar em outra rede Tailscale (pessoal): troca para a do mundo.
-        if std::env::var_os("PAULETOR3_TEST_IP").is_none() {
-            let st = tailscale::status().await;
-            if !tailscale::on_world(&st, cfg.world_tailnet.as_deref()) {
-                self.notice(NoticeLevel::Info, "Entrando na rede do mundo", "O Tailscale está sendo trocado para a rede do pAuletOr 3.");
-                let key = self.secrets.read().await.tailscale_auth_key.clone();
-                let t = tailscale::join_world(key.as_deref(), &cfg.player_name, cfg.world_tailnet.as_deref()).await?;
-                if cfg.world_tailnet.as_deref() != Some(t.as_str()) {
-                    self.update_config(|c| c.world_tailnet = Some(t.clone())).await?;
-                }
-            }
-        }
-        let ip = tailscale::my_ip().await?;
-        let remote = self.remote().await?;
-        let se = SyncEngine::new(remote.clone(), self.paths.clone());
+        let b = self.backend().await?;
+        let se = self.sync_engine().await?;
 
         // 1) versões fixadas (o dono cria na primeira vez)
-        let versions = match Versions::load(&*remote).await? {
+        let versions = match Versions::load(&*b.remote).await? {
             Some(v) => v,
             None if cfg.is_owner => {
                 let v = Versions::builtin();
-                v.save(&*remote).await?;
+                v.save(&*b.remote).await?;
                 v
             }
             None => return Err(NmError::NotConfigured("o dono ainda não criou o mundo".into())),
@@ -474,22 +1017,25 @@ impl Engine {
         let settings = self.world_settings().await?;
 
         // 2) a vez
-        let lm = self.lock_manager().await?;
+        let lm = self.lease_manager().await?;
         let previous_host = match lm.status().await? {
-            LockStatus::Stale { lock } if takeover.contains(&lock.session_id) => Some(lock),
+            LeaseStatus::Free { previous: Some(p) } if p.purpose == LeasePurpose::Hosting && p.holder != b.coord.me() => Some(p),
             _ => None,
         };
         let session_id = uuid::Uuid::new_v4().simple().to_string();
-        let address = cfg.public_address(Some(&ip)).unwrap_or_else(|| ip.clone());
-        let mut me = LockInfo::new(&session_id, &cfg.player_name, LockPurpose::Hosting);
-        me.tailscale_ip = Some(ip.clone());
-        me.address = Some(address.clone());
-        let guard = lm.acquire(me, &takeover).await?;
+        let endpoint = self.node().await.map(|n| n.addr_json());
+        let req = LeaseManager::new_request(&session_id, &cfg.player_name, LeasePurpose::Hosting, endpoint, se.replica_seq());
+        let guard = if trigger == PlayTrigger::Failover {
+            lm.acquire_patiently(req, Duration::from_secs(40)).await?
+        } else {
+            lm.acquire(req).await?
+        };
+        let session_number = guard.session_number();
 
         let started_at = Utc::now();
         // Daqui em diante, qualquer erro precisa soltar a vez (o mundo ainda não mudou).
         let prepared = async {
-            // 3) mundo
+            // 3) mundo (amigos primeiro, nuvem depois)
             let head_before = se.head().await?.map(|h| h.manifest);
             se.pull(self.progress()).await?;
 
@@ -501,9 +1047,10 @@ impl Engine {
                 server::accept_eula(&self.paths)?;
             }
             let rcon_password = util::random_token(32);
-            server::write_properties(&self.paths, &settings, &ip, &rcon_password)?;
-            // Espelho inicial com o servidor ainda parado: assim cada checkpoint só copia o que
-            // mudou e a pausa do salvamento automático do jogo fica em milissegundos.
+            let whitelist = self.whitelist().await;
+            server::write_whitelist(&self.paths, &whitelist)?;
+            server::write_properties(&self.paths, &settings, SERVER_PORT, &rcon_password, !whitelist.is_empty())?;
+            // Espelho inicial com o servidor ainda parado: cada checkpoint só copia o que mudou.
             checkpoint::snapshot_offline(&self.paths).await?;
             Ok::<_, NmError>((head_before, java, rcon_password))
         }
@@ -525,56 +1072,53 @@ impl Engine {
             base_manifest: head_before.clone(),
             last_published: None,
             rcon_password: Some(rcon_password.clone()),
-            server_ip: Some(ip.clone()),
+            server_port: Some(SERVER_PORT),
+            session_number: Some(session_number),
         });
         st.save(&self.paths)?;
 
         self.phase(Phase::Starting);
         let heap = crate::heap::effective_heap_mb(cfg.ram_mb);
-        let proc = ServerProcess::launch(
-            &self.paths,
-            LaunchOptions { java, heap_mb: heap, server_ip: ip.clone(), rcon_password },
-        )
-        .await?;
+        let proc = ServerProcess::launch(&self.paths, LaunchOptions { java, heap_mb: heap, rcon_password }).await?;
         let lines = proc.subscribe_lines();
         self.forward_console(lines);
         let ready = proc.wait_ready(proc.subscribe(), Duration::from_secs(600)).await;
         if let Err(e) = ready {
             tracing::error!(error = %e, "servidor não abriu");
             let _ = proc.stop(Duration::from_secs(60)).await;
-            // O mundo pode ter sido tocado na inicialização: envia como sessão curta, sem perder nada.
             self.finalize_without_session(&guard, &se, &session_id, started_at, head_before.as_deref(), &versions, &cfg.player_name).await;
             let _ = guard.release().await;
             return Err(e);
         }
 
-        // 6) endereço fixo
-        if let (AddressMode::Duckdns, Some(domain)) = (cfg.address_mode, &cfg.duckdns_domain) {
-            if let Some(token) = self.secrets.read().await.duckdns_token.clone() {
-                if let Err(e) = duckdns::update(domain, &token, &ip).await {
-                    tracing::warn!(error = %e, "DuckDNS não atualizou");
-                    self.notice(NoticeLevel::Warning, "DuckDNS não atualizou", "Os amigos podem entrar pelo IP mostrado no app.");
-                }
-            }
+        // 6) o túnel e o proxy passam a levar todo mundo para este servidor
+        if let Some(n) = self.node().await {
+            n.set_hosting(Some(SERVER_PORT));
         }
+        self.set_route(Route::Local(SERVER_PORT)).await;
 
         // 7) estatísticas e diário
-        let mut stats = Stats::load(&*remote).await.unwrap_or_default();
+        if let Ok(p) = b.coord.private_settings().await {
+            self.journal.set_webhook(p.discord_webhook);
+        }
+        let mut stats = Stats::load(&*b.remote).await.unwrap_or_default();
         if stats.world_born.is_none() {
             stats.world_born = Some(started_at);
         }
         if let Some(prev) = &previous_host {
             self.journal.post(msg::host_crash_detected(&prev.player, (Utc::now() - prev.heartbeat_at).num_minutes())).await;
             self.journal.post(msg::took_over(&cfg.player_name, Some(&prev.player))).await;
+            self.diary_post("host_changed", Some(&cfg.player_name), format!("{} caiu; {} assumiu o mundo", prev.player, cfg.player_name));
         }
-        self.journal.post(msg::world_opened(&cfg.player_name, &address, started_at)).await;
+        self.journal.post(msg::world_opened(&cfg.player_name, &cfg.game_address(), started_at)).await;
+        self.diary_post("opened", Some(&cfg.player_name), format!("{} abriu o mundo", cfg.player_name));
         for label in stats.due_anniversaries(Utc::now()) {
             self.journal.post(msg::anniversary(label, stats.world_born.unwrap())).await;
         }
         for (day, d) in stats.due_daily(Utc::now()) {
             self.journal.post(msg::daily(day, &d)).await;
         }
-        let _ = stats.save(&*remote).await;
+        let _ = stats.save(&*b.remote).await;
 
         let session = Arc::new(HostSession {
             session_id: session_id.clone(),
@@ -597,22 +1141,61 @@ impl Engine {
         self.set_status(|s| {
             s.phase = Phase::Hosting;
             s.me_hosting = true;
-            s.address = Some(address.clone());
             s.session_started_at = Some(started_at);
             s.next_checkpoint_at = Some(Utc::now() + chrono::Duration::minutes(cfg.checkpoint_minutes as i64));
             s.online = vec![];
             s.sync = None;
+            s.failover = None;
         });
-        self.notice(NoticeLevel::Success, "Mundo aberto!", &format!("Seus amigos já podem entrar em {address}."));
-
+        match trigger {
+            PlayTrigger::Failover => self.notice(NoticeLevel::Success, "Você assumiu o mundo", "Entre de novo pelo Minecraft: o mundo continua de onde parou."),
+            PlayTrigger::Wake => self.notice(NoticeLevel::Success, "Mundo acordado!", "Entre de novo pelo Minecraft."),
+            PlayTrigger::Button => self.notice(NoticeLevel::Success, "Mundo aberto!", "Seus amigos já podem entrar."),
+        }
         if open_game {
-            if let Some(l) = &cfg.launcher_path {
-                if let Err(e) = launcher::open(l) {
-                    tracing::warn!(error = %e, "não consegui abrir o launcher");
+            self.open_game().await;
+        }
+        Ok(())
+    }
+
+    /// Whitelist a partir dos membros aprovados (quando o UUID de cada um é conhecido).
+    async fn whitelist(&self) -> Vec<WhitelistEntry> {
+        let nick = self.config.read().await.player_name.clone();
+        let id = license::identity(&nick);
+        let view = self.view.read().await.clone();
+        let mut nicks: Vec<String> = view.map(|v| v.members.into_iter().filter(|m| m.approved).map(|m| m.nick).collect()).unwrap_or_default();
+        if !nicks.contains(&nick) {
+            nicks.push(nick);
+        }
+        let mut out = vec![];
+        for n in nicks {
+            match id.uuid_for(&n) {
+                Some(uuid) => out.push(WhitelistEntry { uuid, name: n }),
+                // sem UUID de alguém, a whitelist não pode ser aplicada sem barrar essa pessoa
+                None => return vec![],
+            }
+        }
+        out
+    }
+
+    /// Garante a entrada "pAuletOr 3" no Minecraft e abre o launcher.
+    pub async fn open_game(&self) {
+        let cfg = self.config.read().await.clone();
+        if let Some(mc) = &cfg.minecraft_dir {
+            if !launcher::client_running(None) {
+                if let Err(e) = serversdat::ensure_entry(mc, &cfg.game_address(), &self.paths.backups()) {
+                    tracing::warn!(error = %e, "não consegui criar a entrada no servers.dat");
                 }
             }
         }
-        Ok(())
+        if launcher::client_running(None) {
+            return;
+        }
+        if let Some(l) = &cfg.launcher_path {
+            if let Err(e) = launcher::open(l) {
+                tracing::warn!(error = %e, "não consegui abrir o launcher");
+            }
+        }
     }
 
     fn forward_console(self: &Arc<Self>, mut lines: tokio::sync::broadcast::Receiver<String>) {
@@ -659,9 +1242,9 @@ impl Engine {
             let sess = s.clone();
             tasks.push(tokio::spawn(async move {
                 loop {
-                    let minutes = me.config.read().await.checkpoint_minutes.max(5);
+                    let minutes = me.config.read().await.checkpoint_minutes.max(1);
                     tokio::time::sleep(Duration::from_secs(minutes * 60)).await;
-                    if sess.ending.load(std::sync::atomic::Ordering::SeqCst) {
+                    if sess.ending.load(Ordering::SeqCst) {
                         break;
                     }
                     if let Err(e) = me.checkpoint(&sess).await {
@@ -672,7 +1255,7 @@ impl Engine {
                 }
             }));
         }
-        // fim de sessão, trava perdida, servidor caído, virada do dia
+        // fim de sessão, vez perdida, isolamento, servidor caído, virada do dia
         {
             let me = self.clone();
             let sess = s.clone();
@@ -686,6 +1269,7 @@ impl Engine {
             LogEvent::Joined(p) => {
                 s.log.lock().await.joined(&p, now);
                 self.journal.post(msg::joined(&p, now)).await;
+                self.diary_post("joined", Some(&p), format!("{p} entrou"));
                 (self.events)(Event::PlayerJoined { name: p.clone() });
                 self.publish_online(s).await;
             }
@@ -693,6 +1277,7 @@ impl Engine {
                 let played = s.log.lock().await.left(&p, now);
                 if let Some(secs) = played {
                     self.journal.post(msg::left(&p, secs)).await;
+                    self.diary_post("left", Some(&p), format!("{p} saiu depois de {}", util::human_duration(secs)));
                     let rec = s.stats.lock().await.check_record(&p, secs);
                     if let Some(prev) = rec {
                         self.journal.post(msg::record(&p, secs, prev)).await;
@@ -704,11 +1289,13 @@ impl Engine {
             LogEvent::Death { player, message, .. } => {
                 s.stats.lock().await.on_death(&player, now);
                 self.journal.post(msg::death(&player, &message)).await;
+                self.diary_post("death", Some(&player), message.clone());
             }
             ref e @ LogEvent::Advancement { ref player, ref title, ref kind } => {
                 s.stats.lock().await.on_advancement(player, title, now);
                 let challenge = matches!(kind, crate::logparse::AdvancementKind::Challenge);
                 self.journal.post(msg::advancement(player, title, challenge)).await;
+                self.diary_post("advancement", Some(player), format!("{player} conseguiu [{title}]"));
                 let first = {
                     let mut st = s.stats.lock().await;
                     if e.is_nether_entry() && st.first("nether", player, now) {
@@ -735,29 +1322,50 @@ impl Engine {
     async fn publish_online(self: &Arc<Self>, s: &Arc<HostSession>) {
         let online = s.log.lock().await.online();
         self.set_status(|st| st.online = online.clone());
-        if let Err(e) = s.guard.update(|l| l.online = online).await {
+        if let Err(e) = s.guard.update(Some(online), None).await {
             tracing::warn!(error = %e, "não consegui publicar quem está online");
         }
     }
 
     async fn monitor(self: Arc<Self>, s: Arc<HostSession>) {
-        use std::sync::atomic::Ordering;
         let mut empty_since: Option<tokio::time::Instant> = None;
         let mut warned_friends = false;
+        let mut warned_isolated = false;
         let mut lost = s.guard.lost();
+        let mut isolated = s.guard.isolated();
         let mut day = journal::day_sp(Utc::now());
         let started = tokio::time::Instant::now();
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(10)) => {}
+                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                 _ = lost.changed() => {}
+                _ = isolated.changed() => {}
             }
             if s.ending.load(Ordering::SeqCst) {
                 return;
             }
             if *lost.borrow() {
-                self.on_lock_lost(&s).await;
+                self.on_lock_lost(&s, "Outro PC assumiu o mundo").await;
                 return;
+            }
+            // Sem contato com a coordenação: se nenhum amigo está conectado pelo túnel, este PC
+            // não pode provar que ainda é o host — salva e fecha (nunca dois hosts). Com amigos
+            // conectados, eles avisam a coordenação que o host vive, e a sessão continua.
+            if *isolated.borrow() {
+                let remote_players = match self.node().await {
+                    Some(n) => n.remote_players(),
+                    None => 0,
+                };
+                if remote_players == 0 {
+                    self.on_lock_lost(&s, "Sem internet: o mundo foi salvo neste PC e será enviado quando a conexão voltar").await;
+                    return;
+                }
+                if !warned_isolated {
+                    warned_isolated = true;
+                    self.notice(NoticeLevel::Warning, "Sem contato com a nuvem do mundo", "Seus amigos conectados continuam jogando. O app tenta reconectar sozinho.");
+                }
+            } else {
+                warned_isolated = false;
             }
             if !s.server.running().await {
                 tracing::error!("o servidor fechou sozinho");
@@ -765,7 +1373,9 @@ impl Engine {
                     .post(msg::upload_failed(&s.log.lock().await.host, "O servidor fechou sozinho; o mundo foi salvo como estava."))
                     .await;
                 let me = self.clone();
-                tokio::spawn(async move { let _ = me.end_session(EndReason::UserStop).await; });
+                tokio::spawn(async move {
+                    let _ = me.end_session(EndReason::UserStop).await;
+                });
                 return;
             }
             // virada do dia durante a sessão: resumo do dia anterior
@@ -778,7 +1388,7 @@ impl Engine {
                 }
             }
             let grace = Duration::from_secs(self.config.read().await.grace_minutes.max(1) * 60);
-            let client = launcher::client_running(Some(s.server.pid));
+            let client = launcher::client_running(Some(s.server.pid)) || self.status().playing;
             if client {
                 s.client_seen.store(true, Ordering::SeqCst);
             }
@@ -798,7 +1408,7 @@ impl Engine {
             });
             if seen && !client && !friends.is_empty() && !warned_friends {
                 warned_friends = true;
-                self.notice(NoticeLevel::Warning, "Seus amigos ainda estão jogando", "Não desligue o PC: o mundo fecha sozinho quando o último sair.");
+                self.notice(NoticeLevel::Warning, "Seus amigos ainda estão jogando", "Não desligue o PC: o mundo fecha sozinho quando o último sair. Ou use Passar a vez.");
             }
             // Ninguém jogando: começa a contar a tolerância.
             let nobody = players.is_empty();
@@ -808,7 +1418,9 @@ impl Engine {
                 if since.elapsed() >= grace {
                     tracing::info!("todos saíram; encerrando a sessão");
                     let me = self.clone();
-                    tokio::spawn(async move { let _ = me.end_session(EndReason::Normal).await; });
+                    tokio::spawn(async move {
+                        let _ = me.end_session(EndReason::Normal).await;
+                    });
                     return;
                 }
             } else {
@@ -817,7 +1429,8 @@ impl Engine {
         }
     }
 
-    /// Salvamento periódico (com o servidor rodando).
+    /// Salvamento periódico (com o servidor rodando): envia para a nuvem e publica o HEAD.
+    /// Os amigos online copiam por P2P em seguida (réplica em segundo plano).
     async fn checkpoint(self: &Arc<Self>, s: &Arc<HostSession>) -> NmResult<()> {
         let Ok(_push) = s.push_lock.try_lock() else {
             tracing::info!("envio anterior ainda em andamento; pulando este checkpoint");
@@ -843,14 +1456,14 @@ impl Engine {
             a.last_published = Some(m.id.clone());
         }
         st.save(&self.paths)?;
-        let remote = se.remote.clone();
-        let _ = s.stats.lock().await.save(&*remote).await;
+        let _ = s.stats.lock().await.save(&*se.remote).await;
         self.journal
             .post(msg::checkpoint(&util::human_bytes(m.total_size), &util::human_bytes(snap.mirror.copied_bytes)))
             .await;
         self.set_status(|st| {
             st.last_checkpoint_at = Some(Utc::now());
             st.sync = None;
+            st.replica_seq = LocalState::load(&self.paths).replica.map(|r| r.seq).unwrap_or(0);
         });
         tracing::info!(manifest = %m.id, pause_ms = snap.pause_ms, "checkpoint publicado");
         Ok(())
@@ -860,8 +1473,9 @@ impl Engine {
     pub async fn pass_turn(self: &Arc<Self>) -> NmResult<()> {
         let s = self.session.lock().await.clone().ok_or_else(|| NmError::Other(anyhow::anyhow!("você não está hospedando")))?;
         let host = self.config.read().await.player_name.clone();
-        let _ = s.guard.update(|l| l.handing_over = true).await;
+        let _ = s.guard.update(None, Some(true)).await;
         self.journal.post(msg::handing_over(&host)).await;
+        self.diary_post("handover", Some(&host), format!("{host} passou a vez"));
         for (msg_text, wait) in [
             ("O host vai passar a vez em 30 segundos. Quem quiser continuar: clique em Assumir agora no app.", 20),
             ("Fechando em 10 segundos…", 5),
@@ -875,7 +1489,6 @@ impl Engine {
 
     /// Encerra a sessão: para o servidor, envia o mundo e libera a vez (nessa ordem).
     pub async fn end_session(self: &Arc<Self>, reason: EndReason) -> NmResult<()> {
-        use std::sync::atomic::Ordering;
         let Some(s) = self.session.lock().await.clone() else { return Ok(()) };
         if s.ending.swap(true, Ordering::SeqCst) {
             return Ok(()); // já encerrando
@@ -888,6 +1501,9 @@ impl Engine {
         let graceful = s.server.stop(Duration::from_secs(180)).await;
         if !graceful {
             self.notice(NoticeLevel::Error, "O servidor precisou ser fechado à força", "O último salvamento automático está seguro.");
+        }
+        if let Some(n) = self.node().await {
+            n.set_hosting(None);
         }
         for t in s.tasks.lock().unwrap().drain(..) {
             t.abort();
@@ -903,9 +1519,10 @@ impl Engine {
             Ok(()) => {
                 let host = self.config.read().await.player_name.clone();
                 self.journal.post(msg::world_saved(&host, (now - s.started_at).num_seconds(), &ranking)).await;
+                self.diary_post("saved", Some(&host), format!("Mundo salvo depois de {}", util::human_duration((now - s.started_at).num_seconds())));
                 self.maybe_gc(&s).await;
                 if let Err(e) = s.guard.release().await {
-                    tracing::error!(error = %e, "não consegui liberar a vez; ela expira sozinha em 5 min");
+                    tracing::error!(error = %e, "não consegui liberar a vez; ela expira sozinha em 1 min");
                 }
                 *self.session.lock().await = None;
                 let mut st = LocalState::load(&self.paths);
@@ -921,7 +1538,8 @@ impl Engine {
                     st.friends_still_playing = false;
                     st.sync = None;
                 });
-                self.notice(NoticeLevel::Success, "Mundo salvo na nuvem", "Pode desligar o PC.");
+                self.set_route(Route::idle()).await;
+                self.notice(NoticeLevel::Success, "Mundo salvo", "Pode desligar o PC.");
                 let _ = self.refresh().await;
                 Ok(())
             }
@@ -980,7 +1598,7 @@ impl Engine {
     #[allow(clippy::too_many_arguments)]
     async fn finalize_without_session(
         &self,
-        guard: &LockGuard,
+        guard: &LeaseGuard,
         se: &SyncEngine,
         session_id: &str,
         started_at: DateTime<Utc>,
@@ -1020,13 +1638,19 @@ impl Engine {
         }
     }
 
-    async fn on_lock_lost(self: &Arc<Self>, s: &Arc<HostSession>) {
-        use std::sync::atomic::Ordering;
+    /// A vez não é mais nossa (ou não dá para provar que é): salva e fecha sem publicar.
+    /// O que este PC tinha vira um manifesto solto na linha do tempo (nada é perdido nem
+    /// sobrescreve o mundo de quem assumiu). Sem internet, fica sujo e a recuperação envia depois.
+    async fn on_lock_lost(self: &Arc<Self>, s: &Arc<HostSession>, why: &str) {
         s.ending.store(true, Ordering::SeqCst);
-        tracing::error!("outro PC assumiu o mundo enquanto eu hospedava");
-        self.notice(NoticeLevel::Error, "Outro PC assumiu o mundo", "Seu progresso fica guardado na linha do tempo, sem sobrescrever ninguém.");
-        let _ = s.server.say("Este PC perdeu a vez de hospedar. Salvando e fechando.").await;
+        tracing::error!(%why, "encerrando a sessão sem publicar");
+        self.notice(NoticeLevel::Error, why, "Seu progresso fica guardado na linha do tempo, sem sobrescrever ninguém.");
+        let _ = s.server.say("Este PC deixou de ser o host. Salvando e fechando; entre de novo em alguns segundos.").await;
         s.server.stop(Duration::from_secs(180)).await;
+        if let Some(n) = self.node().await {
+            n.set_hosting(None);
+        }
+        s.guard.abandon().await;
         let _push = s.push_lock.lock().await;
         let r = async {
             let se = self.sync_engine().await?;
@@ -1038,13 +1662,13 @@ impl Engine {
                 host_player: self.config.read().await.player_name.clone(),
                 players: s.log.lock().await.everyone(),
                 versions: s.versions.server_versions(),
-                note: Some("Sessão interrompida: outro PC assumiu".into()),
+                note: Some(format!("Sessão interrompida: {why}")),
             };
             se.push(&self.paths.staging(), meta, None, None, false, self.progress()).await
         }
         .await;
         if let Err(e) = r {
-            tracing::error!(error = %e, "não consegui guardar a sessão interrompida");
+            tracing::error!(error = %e, "não consegui guardar a sessão interrompida; a recuperação envia depois");
         } else {
             let mut st = LocalState::load(&self.paths);
             st.dirty = false;
@@ -1060,7 +1684,9 @@ impl Engine {
             st.phase = Phase::Idle;
             st.me_hosting = false;
             st.sync = None;
+            st.recovery_pending = LocalState::load(&self.paths).dirty;
         });
+        self.set_route(Route::idle()).await;
     }
 
     async fn maybe_gc(&self, s: &Arc<HostSession>) {
@@ -1114,6 +1740,23 @@ impl Engine {
         self.session.lock().await.is_some()
     }
 
+    /// Simula a queda do host (testes): para o heartbeat e mata o servidor, sem salvar nem
+    /// liberar a vez — exatamente o que um PC que desliga de repente deixa para trás.
+    #[doc(hidden)]
+    pub async fn simulate_crash(&self) {
+        let Some(s) = self.session.lock().await.take() else { return };
+        s.ending.store(true, Ordering::SeqCst);
+        s.guard.abandon().await;
+        for t in s.tasks.lock().unwrap().drain(..) {
+            t.abort();
+        }
+        s.server.kill().await;
+        if let Some(n) = self.node().await {
+            n.set_hosting(None);
+        }
+        self.stop_network().await;
+    }
+
     /// Envia um comando para o console do servidor (aba Logs).
     pub async fn console(&self, command: &str) -> NmResult<String> {
         let s = self.session.lock().await.clone().ok_or_else(|| NmError::Other(anyhow::anyhow!("o servidor não está rodando")))?;
@@ -1126,41 +1769,30 @@ impl Engine {
 
     // ------------------------------------------------------------------ amigos assumindo
 
-    /// "Assumir agora": espera a vez ficar livre (o host está salvando) e então joga.
+    /// "Assumir agora": espera a vez ficar livre (o host está salvando) e então hospeda aqui.
     pub async fn take_turn(self: &Arc<Self>, open_game: bool) -> NmResult<()> {
         self.phase(Phase::WaitingTurn);
-        let lm = self.lock_manager().await?;
+        let lm = self.lease_manager().await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15 * 60);
-        let previous;
+        let prev_host;
         loop {
             match lm.status().await? {
-                LockStatus::Free => {
-                    previous = None;
+                LeaseStatus::Free { .. } => {
+                    prev_host = self.status().lease.and_then(|l| l.held().map(|l| l.player.clone()));
                     break;
                 }
-                LockStatus::Stale { lock } => {
-                    previous = Some(lock);
-                    break;
+                LeaseStatus::Held { .. } if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
                 }
-                LockStatus::Held { .. } if tokio::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-                LockStatus::Held { lock } => {
+                LeaseStatus::Held { lease } => {
                     self.phase(Phase::Idle);
-                    return Err(NmError::HeldBy(Box::new(lock)));
+                    return Err(NmError::HeldBy(Box::new(lease)));
                 }
             }
         }
-        if let Some(p) = previous {
-            self.phase(Phase::Idle);
-            return Err(NmError::StaleLock(Box::new(p)));
-        }
+        self.phase(Phase::Idle);
         let me = self.config.read().await.player_name.clone();
-        let prev_host = self.status().lock.and_then(|l| match l {
-            LockStatus::Held { lock } => Some(lock.player),
-            _ => None,
-        });
-        self.play(vec![], open_game).await?;
+        self.play_with(PlayTrigger::Button, open_game).await?;
         self.journal.post(msg::took_over(&me, prev_host.as_deref())).await;
         Ok(())
     }
@@ -1181,11 +1813,9 @@ impl Engine {
         // 1) servidor órfão (o app caiu com ele rodando): para com segurança via RCON
         if let Some(pid) = server::orphan_server_pid(&self.paths) {
             tracing::warn!(pid, "servidor órfão encontrado; parando com segurança");
-            if let Some(a) = &active {
-                if let (Some(pass), Some(ip)) = (&a.rcon_password, &a.server_ip) {
-                    if let Ok(mut r) = crate::rcon::Rcon::connect(&format!("{ip}:{}", crate::RCON_PORT), pass).await {
-                        let _ = r.cmd("stop").await;
-                    }
+            if let Some(pass) = active.as_ref().and_then(|a| a.rcon_password.clone()) {
+                if let Ok(mut r) = crate::rcon::Rcon::connect(&format!("127.0.0.1:{}", crate::RCON_PORT), &pass).await {
+                    let _ = r.cmd("stop").await;
                 }
             }
             for _ in 0..120 {
@@ -1201,14 +1831,12 @@ impl Engine {
             }
         }
 
-        // 2) a minha trava antiga é minha: pode remover
-        let lm = self.lock_manager().await?;
-        if let Some(a) = &active {
-            lm.remove(&a.session_id).await?;
-        }
+        // 2) a vez em modo manutenção (se a minha vez antiga ainda existe, a coordenação deixa
+        //    este PC retomá-la; se outro PC assumiu, não publicamos)
+        let lm = self.lease_manager().await?;
         let session_id = uuid::Uuid::new_v4().simple().to_string();
-        let me = LockInfo::new(&session_id, &cfg.player_name, LockPurpose::Maintenance);
-        let guard = lm.acquire(me, &[]).await.ok();
+        let req = LeaseManager::new_request(&session_id, &cfg.player_name, LeasePurpose::Maintenance, None, se.replica_seq());
+        let guard = lm.acquire(req).await.ok();
 
         // 3) só publica se o HEAD ainda é o desta sessão (ninguém assumiu depois da queda)
         let head = se.head().await?.map(|h| h.manifest);
@@ -1276,8 +1904,8 @@ impl Engine {
 
     async fn maintenance<T, F, Fut>(self: &Arc<Self>, f: F) -> NmResult<T>
     where
-        F: FnOnce(LockGuard, SyncEngine) -> Fut,
-        Fut: std::future::Future<Output = (LockGuard, NmResult<T>)>,
+        F: FnOnce(LeaseGuard, SyncEngine) -> Fut,
+        Fut: std::future::Future<Output = (LeaseGuard, NmResult<T>)>,
     {
         let _op = self.op.try_lock().map_err(|_| NmError::Other(anyhow::anyhow!("já tem uma operação em andamento")))?;
         if self.is_hosting().await {
@@ -1285,16 +1913,17 @@ impl Engine {
         }
         self.phase(Phase::Maintenance);
         let cfg = self.config.read().await.clone();
-        let lm = self.lock_manager().await?;
+        let lm = self.lease_manager().await?;
+        let se = self.sync_engine().await?;
         let session_id = uuid::Uuid::new_v4().simple().to_string();
-        let guard = match lm.acquire(LockInfo::new(&session_id, &cfg.player_name, LockPurpose::Maintenance), &[]).await {
+        let req = LeaseManager::new_request(&session_id, &cfg.player_name, LeasePurpose::Maintenance, None, se.replica_seq());
+        let guard = match lm.acquire(req).await {
             Ok(g) => g,
             Err(e) => {
                 self.phase(Phase::Idle);
                 return Err(e);
             }
         };
-        let se = self.sync_engine().await?;
         let (guard, res) = f(guard, se).await;
         let _ = guard.release().await;
         self.phase(Phase::Idle);
@@ -1317,7 +1946,7 @@ impl Engine {
                     journal::hhmm(target.created_at)
                 );
                 me.journal.post(msg::restored(&player, &label)).await;
-                // o mundo local passa a não corresponder ao HEAD: baixa de novo na próxima vez
+                me.diary_post("restored", Some(&player), format!("{player} restaurou {label}"));
                 let mut st = LocalState::load(&me.paths);
                 if !st.dirty {
                     st.current_manifest = None;
@@ -1341,7 +1970,7 @@ impl Engine {
         .await
     }
 
-    /// Importa uma pasta de mundo existente como nova versão (o dono, no assistente).
+    /// Importa uma pasta de mundo existente como nova versão (o dono, ao criar o mundo).
     pub async fn import_world(self: &Arc<Self>, folder: PathBuf) -> NmResult<()> {
         if !folder.join("level.dat").exists() {
             return Err(NmError::Other(anyhow::anyhow!("essa pasta não tem level.dat; escolha a pasta do mundo")));
@@ -1407,16 +2036,20 @@ impl Engine {
         if self.is_hosting().await {
             return Err(NmError::Other(anyhow::anyhow!("feche a sessão antes")));
         }
-        // Uma operação por vez sobre a pasta do mundo (abrir a tela duas vezes não pode montar duas cópias).
         let _op = self.op.lock().await;
         let se = self.sync_engine().await?;
         if !LocalState::load(&self.paths).dirty {
             se.pull(self.progress()).await?;
         }
         let mut nicks: Vec<String> = vec![self.config.read().await.player_name.clone()];
+        if let Some(v) = self.view.read().await.as_ref() {
+            nicks.extend(v.members.iter().map(|m| m.nick.clone()));
+        }
         if let Ok(st) = Stats::load(&*se.remote).await {
             nicks.extend(st.players.keys().cloned());
         }
+        nicks.sort();
+        nicks.dedup();
         let world = self.paths.world();
         let r = tokio::task::spawn_blocking(move || crate::players::scan(&world, &nicks))
             .await
@@ -1471,8 +2104,22 @@ impl Engine {
     }
 
     pub async fn stats(&self) -> NmResult<Stats> {
-        Stats::load(&*self.remote().await?).await
+        Stats::load(&*self.backend().await?.remote).await
     }
+
+    /// Fotografia mais recente da coordenação.
+    pub async fn view(&self) -> Option<WorldView> {
+        self.view.read().await.clone()
+    }
+
+    /// Vez atual (para a CLI e testes).
+    pub async fn lease(&self) -> NmResult<Option<LeaseInfo>> {
+        Ok(self.lease_manager().await?.status().await?.held().cloned())
+    }
+}
+
+fn waiting(motd: &str, message: &str, wake: bool) -> Route {
+    Route::Waiting { motd: motd.into(), message: message.into(), wake }
 }
 
 fn level_dat_ok(paths: &Paths) -> bool {

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::Serialize;
 
-use crate::lock::LockGuard;
+use crate::lease::LeaseGuard;
 use crate::manifest::ManifestSummary;
 use crate::remote::layout;
 use crate::sync::SyncEngine;
@@ -86,7 +86,7 @@ pub struct GcReport {
 }
 
 /// Roda o GC. Exige a vez (modo manutenção).
-pub async fn gc(engine: &SyncEngine, guard: &LockGuard, policy: Policy, dry_run: bool) -> NmResult<GcReport> {
+pub async fn gc(engine: &SyncEngine, guard: &LeaseGuard, policy: Policy, dry_run: bool) -> NmResult<GcReport> {
     guard.verify().await?;
     let head = engine.head().await?;
     let ids = engine.list_manifest_ids().await?;
