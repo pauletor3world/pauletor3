@@ -29,7 +29,7 @@ export default function Players({ status, toast }: { status: Status | null; toas
   }, [run]);
   useEffect(load, [load]);
 
-  const free = status?.lock?.kind === "free" && !status.me_hosting;
+  const free = status?.lease?.kind === "free" && !status.me_hosting;
 
   const migrate = async () => {
     const t = target;

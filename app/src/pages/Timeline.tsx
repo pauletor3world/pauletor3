@@ -1,11 +1,11 @@
-import { History, RotateCcw } from "lucide-react";
+import { ArrowRightLeft, Award, DoorOpen, History, LogIn, LogOut, RotateCcw, Save, Skull, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Avatar } from "../components/Avatar";
-import { Button, Card, Empty, ErrorBanner, InfoNote, Modal, PageHeader, Pill } from "../components/ui";
+import { Button, Card, Empty, ErrorBanner, InfoNote, Modal, PageHeader, Pill, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { bytes, clock, dateLong, dateTime, duration, kindLabel } from "../lib/format";
 import { useAction, type Toast } from "../lib/hooks";
-import type { ManifestKind, ManifestSummary, Status } from "../lib/types";
+import type { DiaryEvent, ManifestKind, ManifestSummary, Status } from "../lib/types";
 
 const tone: Record<ManifestKind, "moss" | "muted" | "ember" | "dusk" | "sky" | "sun"> = {
   session: "moss",
@@ -19,6 +19,7 @@ const tone: Record<ManifestKind, "moss" | "muted" | "ember" | "dusk" | "sky" | "
 export default function Timeline({ status, toast }: { status: Status | null; toast: (t: Omit<Toast, "id" | "type">) => void }) {
   const [items, setItems] = useState<ManifestSummary[] | null>(null);
   const [showCheckpoints, setShowCheckpoints] = useState(false);
+  const [tab, setTab] = useState<"diary" | "versions">("diary");
   const [target, setTarget] = useState<ManifestSummary | null>(null);
   const { busy, error, setError, run } = useAction();
 
@@ -27,7 +28,7 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
   }, [run]);
   useEffect(load, [load]);
 
-  const free = status?.lock?.kind === "free" && !status.me_hosting;
+  const free = status?.lease?.kind === "free" && !status.me_hosting;
   const headId = status?.head?.id;
 
   const groups = useMemo(() => {
@@ -54,15 +55,28 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
   return (
     <div>
       <PageHeader
-        title="Linha do tempo"
-        subtitle="Cada sessão vira uma versão. Qualquer uma pode ser restaurada — nada é apagado."
+        title="Diário do mundo"
+        subtitle="A história da turma e cada versão salva. Qualquer versão pode ser restaurada — nada é apagado."
         aside={
-          <label className="flex items-center gap-2 text-[12.5px] text-ink-muted cursor-pointer">
+          tab === "versions" && <label className="flex items-center gap-2 text-[12.5px] text-ink-muted cursor-pointer">
             <input type="checkbox" checked={showCheckpoints} onChange={(e) => setShowCheckpoints(e.target.checked)} className="accent-[var(--color-moss-500)]" />
             Mostrar salvamentos automáticos
           </label>
         }
       />
+      <div className="flex gap-1 mb-4 p-1 rounded-xl bg-night-950/40 ring-1 ring-white/5 w-fit">
+        {(["diary", "versions"] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={cx("h-8 px-4 rounded-lg text-[13px] font-medium cursor-pointer transition-colors", tab === t ? "bg-white/[0.08] text-ink" : "text-ink-muted hover:text-ink")}
+          >
+            {t === "diary" ? "Diário" : "Versões salvas"}
+          </button>
+        ))}
+      </div>
+      {tab === "diary" && <DiaryFeed />}
+      {tab === "versions" && (
       <div className="space-y-4">
         <ErrorBanner error={error} onClose={() => setError(null)} />
         {!free && items && items.length > 0 && <InfoNote>Para restaurar uma versão, ninguém pode estar hospedando.</InfoNote>}
@@ -112,6 +126,7 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
           </section>
         ))}
       </div>
+      )}
       <Modal
         open={!!target}
         title="Restaurar esta versão?"
@@ -139,6 +154,61 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+const diaryIcon: Record<string, React.ReactNode> = {
+  opened: <DoorOpen className="size-4 text-moss-300" />,
+  joined: <LogIn className="size-4 text-sky-400" />,
+  left: <LogOut className="size-4 text-ink-muted" />,
+  death: <Skull className="size-4 text-ember-400" />,
+  advancement: <Award className="size-4 text-sun-400" />,
+  host_changed: <ArrowRightLeft className="size-4 text-sun-400" />,
+  handover: <ArrowRightLeft className="size-4 text-sky-400" />,
+  saved: <Save className="size-4 text-moss-300" />,
+  restored: <RotateCcw className="size-4 text-dusk-400" />,
+};
+
+function DiaryFeed() {
+  const [events, setEvents] = useState<DiaryEvent[] | null>(null);
+  const { error, setError, run } = useAction();
+  useEffect(() => {
+    run("diary", () => api.diary(300)).then((e) => e && setEvents(e));
+  }, [run]);
+  const days = useMemo(() => {
+    const m = new Map<string, DiaryEvent[]>();
+    for (const e of events ?? []) {
+      const k = new Date(e.at).toDateString();
+      m.set(k, [...(m.get(k) ?? []), e]);
+    }
+    return [...m.entries()];
+  }, [events]);
+  return (
+    <div className="space-y-4">
+      <ErrorBanner error={error} onClose={() => setError(null)} />
+      {events === null && !error && <div className="h-40 rounded-2xl bg-night-850/60 animate-pulse" />}
+      {events && events.length === 0 && (
+        <Card>
+          <Empty icon={<Sparkles className="size-6" />} title="A história começa na primeira sessão">
+            Quem entrou, mortes, conquistas e trocas de host aparecem aqui sozinhos.
+          </Empty>
+        </Card>
+      )}
+      {days.map(([day, list]) => (
+        <Card key={day} className="animate-rise">
+          <div className="px-5 pt-4 pb-2 text-[12px] uppercase tracking-wider text-ink-faint">{dateLong(list[0].at)}</div>
+          <ul className="px-5 pb-4">
+            {list.map((e, i) => (
+              <li key={i} className="flex items-start gap-3 py-1.5">
+                <span className="mt-0.5 shrink-0">{diaryIcon[e.kind] ?? <Sparkles className="size-4 text-ink-muted" />}</span>
+                <span className="flex-1 text-[13.5px] text-ink-soft">{e.text}</span>
+                <span className="text-[11.5px] text-ink-faint tabular-nums">{clock(e.at)}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      ))}
     </div>
   );
 }

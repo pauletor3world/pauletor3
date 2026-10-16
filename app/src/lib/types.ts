@@ -10,27 +10,70 @@ export type Phase =
   | "maintenance"
   | "waiting_turn";
 
-export interface LockInfo {
+export interface LeaseInfo {
   format: number;
+  session_number: number;
   session_id: string;
+  holder: string;
   player: string;
   machine: string;
-  tailscale_ip: string | null;
-  address: string | null;
+  endpoint: string | null;
   app_version: string;
   purpose: "hosting" | "maintenance";
-  state: "claiming" | "active";
-  claimed_at: string;
-  started_at: string;
+  acquired_at: string;
   heartbeat_at: string;
+  vouched_at: string | null;
   handing_over: boolean;
   online: string[];
 }
 
-export type LockStatus =
-  | { kind: "free" }
-  | { kind: "held"; lock: LockInfo }
-  | { kind: "stale"; lock: LockInfo };
+export type LeaseStatus = { kind: "free"; previous: LeaseInfo | null } | { kind: "held"; lease: LeaseInfo };
+
+export interface MemberView {
+  id: string;
+  nick: string;
+  role: "owner" | "member";
+  approved: boolean;
+  online: boolean;
+  playing: boolean;
+  hosting: boolean;
+  is_me: boolean;
+  last_seen: string | null;
+  path: string | null;
+}
+
+export interface NetStatus {
+  started: boolean;
+  online: boolean;
+  id_short: string | null;
+  path_to_host: string | null;
+  rtt_ms: number | null;
+  proxy_port: number | null;
+  proxy_error: string | null;
+}
+
+export interface Invite {
+  token?: string | null;
+  id: string;
+  created_at: string;
+  expires_at: string;
+  uses_left: number;
+  preapproved: boolean;
+}
+
+export interface DiaryEvent {
+  at: string;
+  kind: string;
+  player: string | null;
+  text: string;
+}
+
+export interface JoinResult {
+  world_id: string;
+  name: string;
+  approved: boolean;
+  owner_nick: string;
+}
 
 export type ManifestKind = "session" | "checkpoint" | "recovered" | "restore" | "import" | "edit";
 
@@ -62,7 +105,7 @@ export interface HumanError {
   code: string;
   title: string;
   detail: string;
-  lock: LockInfo | null;
+  lease: LeaseInfo | null;
 }
 
 export interface Status {
@@ -70,20 +113,28 @@ export interface Status {
   phase: Phase;
   player_name: string;
   world_name: string;
-  lock: LockStatus | null;
+  is_owner: boolean;
+  lease: LeaseStatus | null;
   me_hosting: boolean;
   head: ManifestSummary | null;
+  head_seq: number | null;
+  replica_seq: number;
+  replicating: boolean;
   online: string[];
+  members: MemberView[];
   sync: SyncProgress | null;
-  address: string | null;
+  address: string;
+  playing: boolean;
   host_client_running: boolean;
   friends_still_playing: boolean;
   recovery_pending: boolean;
+  failover: string | null;
   last_error: HumanError | null;
   session_started_at: string | null;
   next_checkpoint_at: string | null;
   last_checkpoint_at: string | null;
-  remote_ok: boolean;
+  coord_ok: boolean;
+  net: NetStatus;
   refreshed_at: string | null;
 }
 
@@ -125,7 +176,6 @@ export interface Check {
   fix_label: string | null;
 }
 
-export type AddressMode = "duckdns" | "direct_ip";
 export type Category =
   | "session"
   | "checkpoint"
@@ -140,15 +190,18 @@ export type Category =
 export interface Config {
   player_name: string;
   is_owner: boolean;
+  coordinator_url: string | null;
+  world_id: string | null;
+  world_name: string;
   minecraft_dir: string | null;
   launcher_path: string | null;
   ram_mb: number | null;
   checkpoint_minutes: number;
   grace_minutes: number;
-  remote_root: string;
-  duckdns_domain: string | null;
-  address_mode: AddressMode;
-  tailscale_key_expires: string | null;
+  proxy_port: number;
+  auto_failover: boolean;
+  wake_on_join: boolean;
+  background_replica: boolean;
   notify_toasts: boolean;
   notify_join_leave: boolean;
   eula_accepted: boolean;
@@ -157,11 +210,9 @@ export interface Config {
 
 export interface SettingsView {
   config: Config;
-  has_webhook: boolean;
-  has_duckdns_token: boolean;
-  has_tailscale_key: boolean;
-  has_remote: boolean;
+  has_admin_token: boolean;
   data_dir: string;
+  build: string;
   auto_heap_mb: number;
   total_ram_mb: number;
   journal_categories: [Category, string, boolean][];
@@ -203,18 +254,13 @@ export interface LauncherCandidate {
   path: string;
 }
 
-export interface TailscaleStatus {
-  installed: boolean;
-  backend_state: string;
-  ipv4: string | null;
-  hostname: string | null;
-  tailnet: string | null;
-  key_expiry: string | null;
-}
-
-export interface WorldNet extends TailscaleStatus {
-  world_tailnet: string | null;
-  on_world: boolean;
+export interface SetupSuggestion {
+  suggested_dir: string;
+  existing_dir: string | null;
+  minecraft_dir: string | null;
+  launchers: LauncherCandidate[];
+  free_space: number | null;
+  pending_invite: string | null;
 }
 
 export interface AppInfo {

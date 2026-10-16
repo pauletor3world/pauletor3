@@ -24,6 +24,7 @@ export default function Health({ toast, onChange, onPage }: { toast: (t: Omit<To
   const fix = async (c: Check) => {
     if (!c.fix) return;
     if (c.fix === "open_settings") return onPage("settings");
+    if (c.fix === "open_owner") return onPage("world");
     const msg = await run(c.id, () => api.runFix(c.fix!));
     if (msg) toast({ level: "success", title: c.title, body: msg });
     load();

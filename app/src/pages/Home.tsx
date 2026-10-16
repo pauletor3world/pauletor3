@@ -2,33 +2,47 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   ArrowRightLeft,
   Clock,
+  Cloud,
+  CloudOff,
   Copy,
+  Crown,
   Gamepad2,
   HardDrive,
   LifeBuoy,
   Play,
   Power,
+  Radio,
+  RefreshCw,
   Save,
-  ShieldAlert,
   Sparkles,
+  UserPlus,
   UserRound,
   Users,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { Avatar } from "../components/Avatar";
 import type { Page } from "../components/Chrome";
 import { Button, Card, CardTitle, Empty, ErrorBanner, InfoNote, Modal, Pill, Progress, cx } from "../components/ui";
 import { api } from "../lib/api";
-import { ago, bytes, clock, duration, heldLock, humanState, phaseLabel, syncLabel } from "../lib/format";
+import { ago, bytes, clock, duration, heldLease, humanState, phaseLabel, syncLabel, syncPct } from "../lib/format";
 import { useAction, useTick, type Toast } from "../lib/hooks";
-import type { LockInfo, Status } from "../lib/types";
+import type { MemberView, Status } from "../lib/types";
 
 type ToastFn = (t: Omit<Toast, "id" | "type">) => void;
+
+interface MainAction {
+  label: string;
+  sub?: string;
+  icon: React.ReactNode;
+  variant: "primary" | "sun" | "secondary";
+  onClick?: () => void;
+  disabled?: boolean;
+}
 
 export default function HomePage({ status, onPage, toast }: { status: Status | null; onPage: (p: Page) => void; toast: ToastFn }) {
   useTick(10000);
   const { busy, error, setError, run } = useAction();
-  const [staleOpen, setStaleOpen] = useState<LockInfo | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
   const [confirmPass, setConfirmPass] = useState(false);
 
@@ -45,52 +59,46 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   }
 
   const st = humanState(status);
-  const held = heldLock(status.lock);
-  const stale = status.lock?.kind === "stale" ? status.lock.lock : null;
+  const held = heldLease(status.lease);
   const working = status.phase !== "idle" && status.phase !== "hosting";
   const err = error ?? status.last_error;
   const online = status.me_hosting ? status.online : held?.online ?? [];
-  const host = status.me_hosting ? status.player_name : held?.player;
+  const host = status.me_hosting ? status.player_name : held?.purpose === "hosting" ? held.player : undefined;
+  const replicaOk = status.head_seq == null || status.replica_seq >= status.head_seq;
 
   const copyAddress = async () => {
-    if (!status.address) return;
     await writeText(status.address);
     toast({ level: "success", title: "Endereço copiado", body: status.address });
   };
 
-  // ---- botão principal, conforme o contexto
-  let main: { label: string; sub?: string; icon: React.ReactNode; variant: "primary" | "sun" | "secondary"; onClick?: () => void; disabled?: boolean };
+  // ---- o botão principal, conforme o contexto
+  let main: MainAction;
   if (status.recovery_pending && status.phase === "idle") {
     main = { label: "Recuperar sessão", sub: "Enviar o que ficou neste PC", icon: <LifeBuoy className="size-6" />, variant: "sun", onClick: () => run("recover", api.recover) };
+  } else if (status.failover) {
+    main = { label: "Trocando de host…", sub: "Não feche o jogo", icon: <RefreshCw className="size-6 animate-spin" />, variant: "secondary", disabled: true };
   } else if (working) {
     main = { label: phaseLabel[status.phase], sub: "Aguarde…", icon: <Sparkles className="size-6" />, variant: "secondary", disabled: true };
   } else if (status.me_hosting) {
-    main = { label: "Abrir o Minecraft", sub: "O mundo já está aberto", icon: <Gamepad2 className="size-6" />, variant: "primary", onClick: () => run("open", api.openLauncher) };
+    main = { label: "Abrir o Minecraft", sub: "O mundo está aberto no seu PC", icon: <Gamepad2 className="size-6" />, variant: "primary", onClick: () => run("open", api.openGame) };
   } else if (held && held.purpose === "maintenance") {
-    main = { label: "Aguardando manutenção", sub: `${held.player} está ajustando o mundo`, icon: <Clock className="size-6" />, variant: "secondary", disabled: true };
+    main = { label: "Aguarde um pouco", sub: `${held.player} está ajustando o mundo`, icon: <Clock className="size-6" />, variant: "secondary", disabled: true };
   } else if (held && held.handing_over) {
     main = { label: "Assumir agora", sub: `${held.player} está passando a vez`, icon: <ArrowRightLeft className="size-6" />, variant: "sun", onClick: () => run("take", () => api.takeTurn(true)) };
   } else if (held) {
-    main = {
-      label: `Entrar no mundo do ${held.player}`,
-      sub: "Multiplayer → pAuletOr 3",
-      icon: <Gamepad2 className="size-6" />,
-      variant: "primary",
-      onClick: () =>
-        run("open", async () => {
-          await api.openLauncher().catch(async () => {
-            await copyAddress();
-          });
-        }),
-    };
-  } else if (stale) {
-    main = { label: "Assumir o mundo", sub: `A sessão de ${stale.player} caiu`, icon: <ShieldAlert className="size-6" />, variant: "sun", onClick: () => setStaleOpen(stale) };
+    main = { label: "Jogar", sub: `Entrar no mundo aberto por ${held.player}`, icon: <Play className="size-6 fill-current" />, variant: "primary", onClick: () => run("play", () => api.play(true)) };
   } else {
-    main = { label: "Jogar", sub: "Abrir o mundo neste PC", icon: <Play className="size-6 fill-current" />, variant: "primary", onClick: () => run("play", () => api.play(true)) };
+    main = {
+      label: "Jogar",
+      sub: replicaOk ? "O mundo acorda no seu PC em segundos" : "O mundo acorda no seu PC",
+      icon: <Play className="size-6 fill-current" />,
+      variant: "primary",
+      onClick: () => run("play", () => api.play(true)),
+    };
   }
 
   const sync = status.sync;
-  const pct = sync ? (sync.bytes_total > 0 ? (sync.bytes_done / sync.bytes_total) * 100 : sync.files_total > 0 ? (sync.files_done / sync.files_total) * 100 : 0) : 0;
+  const pct = syncPct(status) ?? 0;
 
   return (
     <div className="space-y-5">
@@ -104,7 +112,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
         </svg>
         <div className="relative p-7 flex items-end justify-between gap-8">
           <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <Pill tone={st.tone === "live" ? "moss" : st.tone === "warn" ? "ember" : st.tone === "busy" ? "sun" : "muted"}>
                 <span
                   className={cx(
@@ -114,7 +122,11 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
                 />
                 {st.tone === "live" ? "Aberto" : st.tone === "busy" ? "Ocupado" : st.tone === "warn" ? "Atenção" : "Livre"}
               </Pill>
-              {!status.remote_ok && <Pill tone="ember">Sem conexão com a nuvem</Pill>}
+              {status.replicating && (
+                <Pill tone="sky">
+                  <RefreshCw className="size-3 animate-spin" /> Atualizando cópia
+                </Pill>
+              )}
             </div>
             <h1 className="font-display text-[44px] leading-[1.02] font-bold tracking-tight">{status.world_name}</h1>
             <p className="text-[17px] text-ink-soft mt-2">{st.title}</p>
@@ -134,7 +146,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               )}
             </div>
           </div>
-          <div className="shrink-0 w-[280px]">
+          <div className="shrink-0 w-[290px]">
             <button
               onClick={main.onClick}
               disabled={main.disabled || !!busy}
@@ -147,11 +159,9 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               )}
             >
               <div className="flex items-center gap-3.5">
-                <span className={cx("size-11 rounded-xl flex items-center justify-center", main.variant === "secondary" ? "bg-white/5" : "bg-night-950/15")}>
-                  {main.icon}
-                </span>
+                <span className={cx("size-11 rounded-xl flex items-center justify-center", main.variant === "secondary" ? "bg-white/5" : "bg-night-950/15")}>{main.icon}</span>
                 <span className="min-w-0">
-                  <span className="block font-display text-[19px] font-bold leading-tight truncate">{busy ? "Um instante…" : main.label}</span>
+                  <span className="block font-display text-[21px] font-bold leading-tight truncate">{busy ? "Um instante…" : main.label}</span>
                   {main.sub && <span className="block text-[12px] opacity-75 mt-0.5 truncate">{main.sub}</span>}
                 </span>
               </div>
@@ -180,15 +190,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
       <ErrorBanner
         error={err}
         onClose={() => setError(null)}
-        action={
-          err?.code === "stale_lock" && err.lock ? (
-            <Button variant="sun" onClick={() => setStaleOpen(err.lock)}>
-              Entender e assumir
-            </Button>
-          ) : err?.code === "tailscale_down" ? (
-            <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button>
-          ) : undefined
-        }
+        action={err?.code === "remote" || err?.code === "p2p" ? <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button> : undefined}
       />
 
       {/* ---------------------------------------------------------------- sessão (host) */}
@@ -199,17 +201,18 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
             <div className="grid grid-cols-3 gap-3 mb-4">
               <Metric label="Aberto há" value={status.session_started_at ? duration((Date.now() - new Date(status.session_started_at).getTime()) / 1000) : "—"} />
               <Metric label="Próximo salvamento" value={clock(status.next_checkpoint_at)} />
-              <Metric label="Minecraft neste PC" value={status.host_client_running ? "Aberto" : "Fechado"} />
+              <Metric label="Seu Minecraft" value={status.host_client_running ? "Aberto" : "Fechado"} />
             </div>
             {status.friends_still_playing && (
               <div className="mb-4">
                 <InfoNote tone="warn">
-                  <b className="text-ink">Seus amigos ainda estão jogando.</b> Não desligue o PC: o mundo fecha e é salvo sozinho quando o último sair.
+                  <b className="text-ink">Seus amigos ainda estão jogando.</b> Pode fechar o seu jogo: o mundo continua para eles e fecha sozinho quando o último sair. Se precisar
+                  desligar o PC, use <b className="text-ink">Passar a vez</b>.
                 </InfoNote>
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button icon={<Save className="size-4" />} busy={busy === "save"} onClick={() => run("save", api.saveNow).then(() => toast({ level: "success", title: "Mundo salvo na nuvem", body: "" }))}>
+              <Button icon={<Save className="size-4" />} busy={busy === "save"} onClick={() => run("save", api.saveNow).then(() => toast({ level: "success", title: "Mundo salvo", body: "" }))}>
                 Salvar agora
               </Button>
               <Button icon={<ArrowRightLeft className="size-4" />} onClick={() => setConfirmPass(true)}>
@@ -224,92 +227,84 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
       )}
 
       <div className="grid grid-cols-5 gap-5">
-        {/* ------------------------------------------------------------ online */}
+        {/* ------------------------------------------------------------ turma */}
         <Card className="col-span-3 animate-rise">
-          <CardTitle aside={<span className="text-[12px] text-ink-muted">{online.length} online</span>}>Jogadores online</CardTitle>
+          <CardTitle
+            aside={
+              status.is_owner ? (
+                <Button variant="ghost" className="h-7" icon={<UserPlus className="size-4" />} onClick={() => onPage("world")}>
+                  Convidar
+                </Button>
+              ) : (
+                <span className="text-[12px] text-ink-muted">{online.length} no jogo</span>
+              )
+            }
+          >
+            A turma
+          </CardTitle>
           <div className="px-5 pb-5">
-            {online.length === 0 ? (
-              <Empty icon={<Users className="size-6" />} title={host ? "Ninguém online ainda" : "O mundo está dormindo"}>
-                {host ? "Quem entrar aparece aqui na hora." : "Quando alguém abrir o mundo, você vê quem está jogando aqui."}
+            {status.members.length === 0 ? (
+              <Empty icon={<Users className="size-6" />} title="Carregando a turma…">
+                Assim que a nuvem do mundo responder, todo mundo aparece aqui.
               </Empty>
             ) : (
               <ul className="grid grid-cols-2 gap-2.5">
-                {online.map((p) => (
-                  <li key={p} className="flex items-center gap-3 rounded-xl bg-night-950/40 ring-1 ring-white/5 p-2.5 animate-rise">
-                    <Avatar name={p} size={38} ring={p === host} />
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">{p}</div>
-                      <div className="text-[11.5px] text-ink-muted">{p === host ? "Hospedando" : "Jogando"}</div>
-                    </div>
-                  </li>
-                ))}
+                {status.members
+                  .filter((m) => m.approved)
+                  .sort((a, b) => rank(b, online) - rank(a, online))
+                  .map((m) => (
+                    <MemberRow key={m.id} m={m} inGame={online.includes(m.nick)} host={m.nick === host} />
+                  ))}
               </ul>
             )}
           </div>
         </Card>
 
-        {/* ------------------------------------------------------------ endereço */}
+        {/* ------------------------------------------------------------ como entrar */}
         <Card className="col-span-2 animate-rise">
           <CardTitle>Como entrar</CardTitle>
           <div className="px-5 pb-5 space-y-3">
             <ol className="space-y-2 text-ink-soft text-[13px]">
               <li className="flex gap-2.5">
-                <Step n={1} /> Abra o Minecraft <b className="text-ink">1.21.11</b>
+                <Step n={1} /> Clique em <b className="text-ink">Jogar</b> (o Minecraft abre)
               </li>
               <li className="flex gap-2.5">
                 <Step n={2} /> Multiplayer → <b className="text-ink">pAuletOr 3</b>
               </li>
             </ol>
             <div className="rounded-xl bg-night-950/60 ring-1 ring-white/5 p-3">
-              <div className="text-[11px] uppercase tracking-wider text-ink-faint mb-1">Endereço</div>
+              <div className="text-[11px] uppercase tracking-wider text-ink-faint mb-1">Endereço (sempre o mesmo)</div>
               <div className="flex items-center justify-between gap-2">
-                <code className="font-mono text-[13px] text-moss-300 truncate selectable">{status.address ?? "aparece quando alguém abrir o mundo"}</code>
-                {status.address && (
-                  <button onClick={copyAddress} className="shrink-0 text-ink-muted hover:text-ink cursor-pointer" title="Copiar endereço" aria-label="Copiar endereço">
-                    <Copy className="size-4" />
-                  </button>
-                )}
+                <code className="font-mono text-[14px] text-moss-300 truncate selectable">{status.address}</code>
+                <button onClick={copyAddress} className="shrink-0 text-ink-muted hover:text-ink cursor-pointer" title="Copiar endereço" aria-label="Copiar endereço">
+                  <Copy className="size-4" />
+                </button>
               </div>
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-[11.5px]">
+              {status.coord_ok ? (
+                <Pill tone="muted">
+                  <Cloud className="size-3" /> Nuvem ok
+                </Pill>
+              ) : (
+                <Pill tone="ember">
+                  <CloudOff className="size-3" /> Sem nuvem
+                </Pill>
+              )}
+              {status.net.path_to_host && (
+                <Pill tone={status.net.path_to_host === "direta" ? "moss" : "sun"}>
+                  {status.net.path_to_host === "direta" ? <Zap className="size-3" /> : <Radio className="size-3" />}
+                  Conexão {status.net.path_to_host}
+                  {status.net.rtt_ms != null && ` · ${status.net.rtt_ms} ms`}
+                </Pill>
+              )}
+              <Pill tone={replicaOk ? "muted" : "sky"}>{replicaOk ? "Cópia local em dia" : "Cópia local atualizando"}</Pill>
             </div>
           </div>
         </Card>
       </div>
 
       {/* ---------------------------------------------------------------- modais */}
-      <Modal
-        open={!!staleOpen}
-        title={`A sessão de ${staleOpen?.player ?? ""} parece ter caído`}
-        onClose={() => setStaleOpen(null)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setStaleOpen(null)}>
-              Agora não
-            </Button>
-            <Button
-              variant="sun"
-              busy={busy === "takeover"}
-              onClick={() => {
-                const s = staleOpen;
-                setStaleOpen(null);
-                if (s) run("takeover", () => api.play(true, [s.session_id]));
-              }}
-            >
-              Assumir o mundo
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-3 text-[13.5px]">
-          <p>
-            O PC de <b className="text-ink">{staleOpen?.player}</b> parou de dar sinal {ago(staleOpen?.heartbeat_at)} e o servidor dele não responde. Isso costuma ser queda de energia ou de
-            internet.
-          </p>
-          <p>
-            Se você assumir, o mundo continua a partir do <b className="text-ink">último salvamento</b> que chegou à nuvem. Quando o PC dele voltar, o que tiver lá fica guardado na linha do tempo —
-            nada é sobrescrito.
-          </p>
-        </div>
-      </Modal>
       <Modal
         open={confirmStop}
         title="Encerrar a sessão?"
@@ -331,8 +326,10 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
           </>
         }
       >
-        {online.length > 0 ? `${online.join(", ")} ${online.length > 1 ? "estão" : "está"} online e ${online.length > 1 ? "serão desconectados" : "será desconectado"}.` : "Ninguém está online."} O mundo será salvo e enviado
-        para a nuvem.
+        {online.length > 0
+          ? `${online.join(", ")} ${online.length > 1 ? "estão" : "está"} online e ${online.length > 1 ? "serão desconectados" : "será desconectado"}. Se preferir que continuem, use Passar a vez.`
+          : "Ninguém está online."}{" "}
+        O mundo será salvo e guardado.
       </Modal>
       <Modal
         open={confirmPass}
@@ -355,10 +352,38 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
           </>
         }
       >
-        Todos recebem um aviso no chat com contagem regressiva de 30 segundos. Depois o mundo é salvo e qualquer amigo pode clicar em <b className="text-ink">Assumir agora</b> no app para continuar
-        do PC dele, no mesmo endereço.
+        Todos recebem um aviso no chat com 30 segundos de contagem. O mundo é salvo e um amigo que estiver jogando assume sozinho — é só entrar de novo, no mesmo endereço.
       </Modal>
     </div>
+  );
+}
+
+function rank(m: MemberView, online: string[]) {
+  return (m.hosting ? 8 : 0) + (online.includes(m.nick) ? 4 : 0) + (m.online ? 2 : 0) + (m.is_me ? 1 : 0);
+}
+
+function MemberRow({ m, inGame, host }: { m: MemberView; inGame: boolean; host: boolean }) {
+  const label = host ? "Hospedando" : inGame ? "No jogo" : m.online ? "Com o app aberto" : m.last_seen ? `Visto ${ago(m.last_seen)}` : "Ainda não apareceu";
+  return (
+    <li className={cx("flex items-center gap-3 rounded-xl ring-1 p-2.5 animate-rise", inGame || host ? "bg-moss-500/[0.06] ring-moss-400/15" : "bg-night-950/40 ring-white/5")}>
+      <div className="relative">
+        <Avatar name={m.nick} size={38} ring={host} />
+        <span
+          className={cx(
+            "absolute -right-0.5 -bottom-0.5 size-3 rounded-full ring-2 ring-night-850",
+            inGame || host ? "bg-moss-400" : m.online ? "bg-sky-400" : "bg-ink-faint/60",
+          )}
+        />
+      </div>
+      <div className="min-w-0">
+        <div className="font-semibold truncate flex items-center gap-1.5">
+          {m.nick}
+          {m.role === "owner" && <Crown className="size-3.5 text-sun-400" aria-label="Dono" />}
+          {m.is_me && <span className="text-[11px] text-ink-faint font-normal">(você)</span>}
+        </div>
+        <div className="text-[11.5px] text-ink-muted truncate">{label}</div>
+      </div>
+    </li>
   );
 }
 

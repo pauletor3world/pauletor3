@@ -1,4 +1,4 @@
-import type { LockStatus, ManifestKind, Phase, Status, SyncPhaseName } from "./types";
+import type { LeaseStatus, ManifestKind, Phase, Status, SyncPhaseName } from "./types";
 
 export function bytes(n: number): string {
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -82,29 +82,37 @@ export const phaseLabel: Record<Phase, string> = {
   waiting_turn: "Esperando a vez",
 };
 
-export function heldLock(l: LockStatus | null) {
-  return l && l.kind === "held" ? l.lock : null;
+export function heldLease(l: LeaseStatus | null) {
+  return l && l.kind === "held" ? l.lease : null;
+}
+
+/** Porcentagem da sincronização em andamento. */
+export function syncPct(s: Status): number | null {
+  const x = s.sync;
+  if (!x) return null;
+  if (x.bytes_total > 0) return Math.min(100, (x.bytes_done / x.bytes_total) * 100);
+  if (x.files_total > 0) return (x.files_done / x.files_total) * 100;
+  return 0;
 }
 
 /** O estado do mundo em linguagem humana. */
 export function humanState(s: Status): { title: string; tone: "free" | "busy" | "live" | "warn" } {
   if (s.recovery_pending && s.phase === "idle") return { title: "Sessão interrompida neste PC — vamos recuperar", tone: "warn" };
+  if (s.failover) return { title: s.failover, tone: "busy" };
   if (s.phase !== "idle" && s.phase !== "hosting") {
-    const pct = s.sync && s.sync.bytes_total > 0 ? ` ${Math.floor((s.sync.bytes_done / s.sync.bytes_total) * 100)}%` : "";
-    return { title: `${phaseLabel[s.phase]}${pct}…`, tone: "busy" };
+    const pct = syncPct(s);
+    return { title: `${phaseLabel[s.phase]}${pct != null ? ` ${Math.floor(pct)}%` : ""}…`, tone: "busy" };
   }
-  if (s.me_hosting) {
-    const n = s.online.length;
-    return { title: `Você está hospedando · ${n} online`, tone: "live" };
+  if (s.me_hosting) return { title: `Você está hospedando · ${s.online.length} online`, tone: "live" };
+  const l = heldLease(s.lease);
+  if (l) {
+    if (l.purpose === "maintenance") return { title: `${l.player} está fazendo manutenção`, tone: "busy" };
+    if (l.handing_over) return { title: `${l.player} está passando a vez`, tone: "busy" };
+    return { title: `${l.player} está hospedando · ${l.online.length} online`, tone: "live" };
   }
-  const l = s.lock;
-  if (l?.kind === "held") {
-    if (l.lock.purpose === "maintenance") return { title: `${l.lock.player} está fazendo manutenção`, tone: "busy" };
-    if (l.lock.handing_over) return { title: `${l.lock.player} está passando a vez`, tone: "busy" };
-    return { title: `${l.lock.player} está hospedando · ${l.lock.online.length} online`, tone: "live" };
-  }
-  if (l?.kind === "stale") return { title: `A sessão de ${l.lock.player} parece ter caído`, tone: "warn" };
-  return { title: "Livre — ninguém jogando", tone: "free" };
+  if (!s.coord_ok) return { title: "Sem conexão com a nuvem do mundo", tone: "warn" };
+  if (s.replicating) return { title: "Livre · atualizando a cópia deste PC", tone: "free" };
+  return { title: "Livre — clique em Jogar e o mundo acorda", tone: "free" };
 }
 
 /** Cor estável por nome (para avatares e gráficos). */

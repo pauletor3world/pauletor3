@@ -16,6 +16,7 @@ import SettingsPage from "./pages/Settings";
 import StatsPage from "./pages/Stats";
 import Timeline from "./pages/Timeline";
 import Wizard from "./pages/Wizard";
+import World from "./pages/World";
 
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
@@ -108,16 +109,17 @@ export default function App() {
         </div>
       )}
       <div className="flex-1 flex min-h-0">
-        <Sidebar page={page} onPage={setPage} isOwner={info.is_owner} version={info.version} healthBad={healthBad} />
+        <Sidebar page={page} onPage={setPage} isOwner={status?.is_owner ?? info.is_owner} version={info.version} healthBad={healthBad} />
         <main className="flex-1 min-w-0 scroll">
           <div className="max-w-[1080px] mx-auto px-8 py-7">
             {page === "home" && <HomePage status={status} onPage={setPage} toast={push} />}
+            {page === "world" && <World status={status} toast={push} />}
             {page === "timeline" && <Timeline status={status} toast={push} />}
             {page === "stats" && <StatsPage />}
             {page === "health" && <Health toast={push} onChange={(bad) => setHealthBad(bad)} onPage={setPage} />}
             {page === "logs" && <Logs status={status} toast={push} />}
-            {page === "players" && info.is_owner && <Players status={status} toast={push} />}
-            {page === "settings" && <SettingsPage status={status} isOwner={info.is_owner} toast={push} />}
+            {page === "players" && (status?.is_owner ?? info.is_owner) && <Players status={status} toast={push} />}
+            {page === "settings" && <SettingsPage status={status} isOwner={status?.is_owner ?? info.is_owner} toast={push} />}
           </div>
         </main>
       </div>
@@ -125,7 +127,7 @@ export default function App() {
       <Modal open={quitting} title="Salvando o mundo antes de sair" onClose={() => {}}>
         <div className="flex items-center gap-3 py-2">
           <Loader2 className="size-5 animate-spin text-moss-400" />
-          <span>Fechando o servidor e enviando o mundo para a nuvem. O app fecha sozinho quando terminar.</span>
+          <span>Fechando o servidor e guardando o mundo. O app fecha sozinho quando terminar.</span>
         </div>
       </Modal>
     </div>

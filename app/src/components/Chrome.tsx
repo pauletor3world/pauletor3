@@ -10,6 +10,7 @@ import {
   Settings,
   Square,
   Users,
+  Globe2,
   X,
   AlertTriangle,
   Info,
@@ -20,7 +21,7 @@ import type { Toast } from "../lib/hooks";
 import type { Status } from "../lib/types";
 import { cx } from "./ui";
 
-export type Page = "home" | "timeline" | "stats" | "health" | "logs" | "players" | "settings";
+export type Page = "home" | "world" | "timeline" | "stats" | "health" | "logs" | "players" | "settings";
 
 export function TitleBar({ status }: { status: Status | null }) {
   const w = getCurrentWindow();
@@ -73,7 +74,8 @@ function WinBtn({ children, onClick, label, danger }: { children: ReactNode; onC
 
 const NAV: { id: Page; label: string; icon: ReactNode; owner?: boolean }[] = [
   { id: "home", label: "Início", icon: <Home className="size-[18px]" /> },
-  { id: "timeline", label: "Linha do tempo", icon: <History className="size-[18px]" /> },
+  { id: "world", label: "Mundo e turma", icon: <Globe2 className="size-[18px]" /> },
+  { id: "timeline", label: "Diário", icon: <History className="size-[18px]" /> },
   { id: "stats", label: "Estatísticas", icon: <BarChart3 className="size-[18px]" /> },
   { id: "health", label: "Saúde", icon: <Activity className="size-[18px]" /> },
   { id: "logs", label: "Console", icon: <ScrollText className="size-[18px]" /> },

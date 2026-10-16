@@ -1,7 +1,6 @@
 import { disable as autostartOff, enable as autostartOn, isEnabled as autostartIs } from "@tauri-apps/plugin-autostart";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Copy, FolderOpen, KeyRound, Send, Sparkles, Trash2, UserPlus } from "lucide-react";
+import { FolderOpen, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, Card, CardTitle, ErrorBanner, Field, InfoNote, PageHeader, Pill, Toggle, inputCls } from "../components/ui";
 import { api } from "../lib/api";
@@ -44,7 +43,7 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
     );
   }
   const c = s.config;
-  const free = status?.lock?.kind === "free" && !status.me_hosting;
+  const free = status?.lease?.kind === "free" && !status.me_hosting;
 
   return (
     <div>
@@ -114,41 +113,47 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
           />
         </Section>
 
-        <JournalSection s={s} reload={load} toast={toast} />
+        <JournalSection s={s} reload={load} />
 
-        <Section title="Endereço do mundo">
-          <div className="grid grid-cols-2 gap-4">
-            <TextSetting label="Nome no DuckDNS" value={c.duckdns_domain ?? ""} hint={c.duckdns_domain ? `${c.duckdns_domain}.duckdns.org` : "ex.: pauletor3"} onSave={(v) => save({ duckdns_domain: v })} />
-            <SecretSetting label="Token do DuckDNS" present={s.has_duckdns_token} onSave={(v) => run("secret", () => api.setSecret("duckdns_token", v)).then(load)} />
-          </div>
-          <div className="mt-3">
-            <Toggle
-              checked={c.address_mode === "direct_ip"}
-              onChange={(v) => save({ address_mode: v ? "direct_ip" : "duckdns" })}
-              label="Usar IP direto em vez do DuckDNS"
-              hint="Plano B: o app atualiza a entrada pAuletOr 3 do Minecraft com o IP de quem hospeda (com o jogo fechado)."
+        <Section title="O mundo sempre no ar">
+          <Toggle
+            checked={c.auto_failover}
+            onChange={(v) => save({ auto_failover: v })}
+            label="Assumir sozinho se o host cair"
+            hint="Se quem hospeda sair de repente e você estiver jogando, este PC continua o mundo do último salvamento."
+          />
+          <Toggle
+            checked={c.wake_on_join}
+            onChange={(v) => save({ wake_on_join: v })}
+            label="Acordar o mundo pelo Minecraft"
+            hint="Com o mundo livre, tentar entrar em pAuletOr 3 já abre o servidor neste PC."
+          />
+          <Toggle
+            checked={c.background_replica}
+            onChange={(v) => save({ background_replica: v })}
+            label="Manter uma cópia do mundo neste PC"
+            hint="Com o app aberto, a cópia se atualiza sozinha. Assim Jogar abre em segundos e o mundo nunca depende de um PC só."
+          />
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            <TextSetting
+              label="Porta no Minecraft"
+              value={String(c.proxy_port)}
+              hint={`Endereço: ${c.proxy_port === 25565 ? "localhost" : `localhost:${c.proxy_port}`}. Troque só se outro programa usar a 25565 (reinicie o app depois).`}
+              onSave={(v) => save({ proxy_port: Number(v) || 25565 })}
+            />
+            <TextSetting
+              label="Salvamento automático (minutos)"
+              value={String(c.checkpoint_minutes)}
+              hint="Se o host cair, perde-se no máximo esse tempo."
+              onSave={(v) => save({ checkpoint_minutes: Number(v) || 5 })}
             />
           </div>
         </Section>
 
         {isOwner && <WorldSection free={free} toast={toast} />}
-        {isOwner && <InviteSection s={s} toast={toast} reload={load} />}
 
         <Section title="Avançado">
           <div className="flex flex-wrap gap-2">
-            <Button
-              busy={busy === "fw"}
-              onClick={() => run("fw", api.installFirewall).then((r) => r !== undefined && toast({ level: "success", title: "Firewall configurado", body: "Porta liberada só para o Tailscale." }))}
-            >
-              Configurar firewall
-            </Button>
-            <Button
-              variant="ghost"
-              busy={busy === "fwrm"}
-              onClick={() => run("fwrm", api.removeFirewall).then((r) => r !== undefined && toast({ level: "success", title: "Regras do firewall removidas", body: "Use antes de desinstalar o app." }))}
-            >
-              Remover regras do firewall
-            </Button>
             {isOwner && (
               <Button
                 icon={<Trash2 className="size-4" />}
@@ -234,31 +239,9 @@ function PathSetting({ label, value, directory, onSave }: { label: string; value
   );
 }
 
-function SecretSetting({ label, present, onSave, placeholder }: { label: string; present: boolean; onSave: (v: string) => void; placeholder?: string }) {
-  const [v, setV] = useState("");
-  return (
-    <Field label={label} hint={present ? "Configurado e guardado com segurança (DPAPI)." : "Ainda não configurado."}>
-      <div className="flex gap-2">
-        <input className={inputCls} type="password" value={v} placeholder={present ? "•••••••• (cole para trocar)" : placeholder} onChange={(e) => setV(e.target.value)} />
-        {v && (
-          <Button
-            variant="primary"
-            onClick={() => {
-              onSave(v.trim());
-              setV("");
-            }}
-          >
-            Salvar
-          </Button>
-        )}
-      </div>
-    </Field>
-  );
-}
-
-function JournalSection({ s, reload, toast }: { s: SettingsView; reload: () => void; toast: ToastFn }) {
+function JournalSection({ s, reload }: { s: SettingsView; reload: () => void }) {
   const [js, setJs] = useState<JournalStatus | null>(null);
-  const { busy, error, setError, run } = useAction();
+  const { error, setError, run } = useAction();
   useEffect(() => {
     api.journalStatus().then(setJs).catch(() => {});
   }, [s]);
@@ -270,30 +253,11 @@ function JournalSection({ s, reload, toast }: { s: SettingsView; reload: () => v
   return (
     <Section
       title="Diário do mundo (Discord)"
-      aside={js && s.has_webhook ? <Pill tone={js.last_error ? "sun" : "moss"}>{js.last_error ? "com problema" : js.pending ? `${js.pending} na fila` : "em dia"}</Pill> : undefined}
+      aside={js && (js.pending > 0 || js.last_error || js.last_sent_at) ? <Pill tone={js.last_error ? "sun" : "moss"}>{js.last_error ? "com problema" : js.pending ? `${js.pending} na fila` : "em dia"}</Pill> : undefined}
     >
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {js?.last_error && <InfoNote tone="warn">{js.last_error}</InfoNote>}
-      <div className="flex gap-2 items-end mt-2">
-        <div className="flex-1">
-          <SecretSetting
-            label="URL do webhook"
-            present={s.has_webhook}
-            placeholder="https://discord.com/api/webhooks/…"
-            onSave={(v) => run("hook", () => api.setSecret("discord_webhook", v)).then(reload)}
-          />
-        </div>
-        {s.has_webhook && (
-          <Button
-            icon={<Send className="size-4" />}
-            busy={busy === "test"}
-            className="mb-[26px]"
-            onClick={() => run("test", () => api.testWebhook()).then((r) => r !== undefined && toast({ level: "success", title: "Mensagem de teste enviada", body: "Confira o canal no Discord." }))}
-          >
-            Testar
-          </Button>
-        )}
-      </div>
+      <p className="text-[13px] text-ink-soft mb-1">O endereço do canal (webhook) é configurado pelo dono na aba Mundo e turma. Aqui você escolhe o que este PC publica quando hospeda.</p>
       <p className="text-[12px] text-ink-muted mt-2 mb-1">Só o app de quem hospeda publica os eventos da sessão, então nada sai duplicado.</p>
       <div className="grid grid-cols-2 gap-x-8">
         {cats.map(([k, label, on]) => (
@@ -372,71 +336,6 @@ function WorldSection({ free, toast }: { free: boolean; toast: ToastFn }) {
       </div>
       <div className="mt-2">
         <Toggle checked={w.pvp} onChange={(v) => set("pvp", v)} label="PvP (jogadores podem se atacar)" />
-      </div>
-    </Section>
-  );
-}
-
-function InviteSection({ s, toast, reload }: { s: SettingsView; toast: ToastFn; reload: () => void }) {
-  const [pw, setPw] = useState("");
-  const [code, setCode] = useState<string | null>(null);
-  const [key, setKey] = useState("");
-  const [exp, setExp] = useState(s.config.tailscale_key_expires ?? "");
-  const { busy, error, setError, run } = useAction();
-  return (
-    <Section title="Convidar um amigo">
-      <ErrorBanner error={error} onClose={() => setError(null)} />
-      <p className="text-[13px] text-ink-soft mb-3">
-        O convite leva, criptografados, o acesso à nuvem do mundo, a chave do Tailscale, o DuckDNS e o Discord. Mande o código por um lado e a senha por outro (por exemplo, a senha por voz).
-      </p>
-      <div className="flex gap-2">
-        <input className={inputCls} type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Crie uma senha para o convite (mín. 8 caracteres)" />
-        <Button variant="primary" icon={<UserPlus className="size-4" />} busy={busy === "inv"} disabled={pw.length < 8} onClick={() => run("inv", () => api.createInvite(pw)).then((c) => c && setCode(c))}>
-          Gerar convite
-        </Button>
-      </div>
-      {code && (
-        <div className="mt-3 rounded-xl bg-night-950/60 ring-1 ring-moss-500/20 p-3 animate-rise">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[12px] text-moss-300 font-medium flex items-center gap-1.5">
-              <Sparkles className="size-3.5" /> Código de convite
-            </span>
-            <button
-              className="text-ink-muted hover:text-ink cursor-pointer flex items-center gap-1 text-[12px]"
-              onClick={async () => {
-                await writeText(code);
-                toast({ level: "success", title: "Convite copiado", body: "Mande a senha separado." });
-              }}
-            >
-              <Copy className="size-3.5" /> Copiar
-            </button>
-          </div>
-          <code className="block font-mono text-[11px] text-ink-soft break-all max-h-24 overflow-auto selectable">{code}</code>
-        </div>
-      )}
-      <div className="mt-5 grid grid-cols-[1fr_180px_auto] gap-2 items-end">
-        <Field label="Chave de convite do Tailscale (reutilizável)" hint={s.has_tailscale_key ? "Configurada." : "Gere em login.tailscale.com → Settings → Keys."}>
-          <input className={inputCls} type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="tskey-auth-…" />
-        </Field>
-        <Field label="Expira em">
-          <input className={inputCls} type="date" value={exp} onChange={(e) => setExp(e.target.value)} />
-        </Field>
-        <Button
-          icon={<KeyRound className="size-4" />}
-          className="mb-[26px]"
-          disabled={!key && exp === (s.config.tailscale_key_expires ?? "")}
-          onClick={() =>
-            run("key", () => api.saveNetwork({ tailscale_auth_key: key || undefined, tailscale_key_expires: exp || undefined })).then((r) => {
-              if (r !== undefined) {
-                setKey("");
-                reload();
-                toast({ level: "success", title: "Chave salva", body: "Gere um convite novo para os amigos que ainda não entraram." });
-              }
-            })
-          }
-        >
-          Salvar chave
-        </Button>
       </div>
     </Section>
   );

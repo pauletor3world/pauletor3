@@ -25,6 +25,7 @@
     "process:allow-restart",
     "opener:allow-open-url",
     "deep-link:default",
-    "core:event:default"
+    "core:event:default",
+    "clipboard-manager:allow-read-text"
   ]
 }
