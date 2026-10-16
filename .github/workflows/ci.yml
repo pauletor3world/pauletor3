@@ -3,7 +3,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   pull_request:
 
 jobs:
@@ -20,9 +20,12 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: rclone (para os testes de integração)
-        shell: pwsh
-        run: ./scripts/baixar-rclone.ps1
+      - name: coordenação (Worker)
+        working-directory: coordinator
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npx vitest run
       - name: interface
         working-directory: app
         run: |

@@ -1,138 +1,70 @@
-# Arquitetura
-
-## Visão geral
+# Arquitetura (v2)
 
 ```mermaid
 flowchart LR
-  subgraph PC["PC de quem hospeda"]
-    UI["App pAuletOr 3<br/>(Tauri + React)"] --> CORE["pauletor3-core<br/>(Rust)"]
-    CORE --> RCLONE["rclone<br/>(sidecar)"]
-    CORE --> JAVA["Java 21 Temurin"]
-    JAVA --> MC["Servidor Fabric 1.21.11<br/>+ Lithium"]
-    CORE -- "RCON (IP do Tailscale)" --> MC
+  subgraph PC1["PC de quem hospeda"]
+    MC1["Minecraft"] -->|"localhost:25565"| PX1["proxy local"]
+    PX1 --> SRV["servidor Fabric 1.21.11 + Lithium<br/>127.0.0.1:25566 · RCON 127.0.0.1"]
+    CORE1["pauletor3-core<br/>(sessão, sync, lease)"] --> SRV
   end
-  RCLONE <--> DRIVE[("Google Drive<br/>conta dedicada")]
-  CORE --> DUCK["DuckDNS<br/>pauletor3.duckdns.org"]
-  CORE --> DISCORD["Discord<br/>(diário do mundo)"]
-  AMIGO["Minecraft dos amigos<br/>(vanilla 1.21.11)"] -- "Tailscale (100.x)" --> MC
-  AMIGOAPP["App dos amigos"] --> DRIVE
+  subgraph PC2["PC de um amigo"]
+    MC2["Minecraft"] -->|"localhost:25565"| PX2["proxy local"]
+  end
+  PX2 == "túnel iroh (QUIC P2P;<br/>relay n0 se o furo de NAT falhar)" ==> PX1
+  CORE1 <-. "réplica P2P (objetos por hash)" .-> PX2
+  CORE1 -->|"HTTPS assinado (Ed25519)"| W["Worker Cloudflare"]
+  PX2 -->|"presença a cada 4–20 s"| W
+  W --> DO1[("WorldDO<br/>lease · HEAD · membros · convites · diário")]
+  W --> DO2[("BlobShardDO ×16<br/>mundo cifrado")]
 ```
 
-- **`core/`** (`pauletor3-core`): toda a lógica, sem dependência de interface, mais a CLI `pauletor3-cli`.
-- **`app/`**: Tauri 2 (Rust) + React/TypeScript/Tailwind. Fica com a bandeja, as notificações, o autostart, o updater e o bloqueio do desligamento do Windows.
+## Peças
 
-## Modelo de sincronização
-
-```mermaid
-flowchart TB
-  subgraph REMOTE["Remote (pasta pAuletOr3 no Drive)"]
-    HEAD["HEAD.json<br/>{manifest, seq}"] --> M2["manifests/…-ana.json"]
-    M2 -. parent .-> M1["manifests/…-bia.json"]
-    M2 --> O1["objects/3fa9…"]
-    M2 --> O2["objects/b71c…"]
-    M1 --> O1
-    M1 --> O3["objects/e0d2…"]
-    LOCKS["locks/<sessão>.json"]
-    V["versions.json"]
-    W["world-settings.json"]
-    S["stats.json"]
-  end
-```
-
-| Arquivo | Conteúdo |
+| Peça | O que faz |
 |---|---|
-| `objects/<sha256>` | Cada arquivo do mundo (região, `level.dat`, playerdata…), guardado uma vez, pelo hash. Arquivos iguais nunca são reenviados. |
-| `manifests/<data>-<host>-<id>.json` | Mapa caminho → `{hash, tamanho, mtime}` de uma versão completa, com metadados: tipo, host, sessão, duração, jogadores, versões, `parent`. |
-| `HEAD.json` | Aponta para o manifesto atual. **Gravado por último**, depois de todos os objetos confirmados no remote. |
-| `locks/<sessão>.json` | Reivindicação de vez (ver abaixo). |
-| `versions.json` | Versões fixadas com hashes; a fonte da verdade para todos. |
-| `world-settings.json` | Dificuldade, modo, distâncias, MOTD, seed. |
-| `stats.json` | Estatísticas, resumo diário e marcos (só o dono da vez grava). |
+| `core/src/coord` | Contrato da coordenação (`Coordinator`), regras puras (`rules.rs`), implementação em memória (testes) e cliente HTTP. |
+| `core/src/lease.rs` | Posse da vez: heartbeat a cada 10 s, detecção de vez perdida e de isolamento. |
+| `core/src/sync.rs` | Modelo endereçado por conteúdo (objetos sha256 + manifestos). HEAD só muda por CAS na coordenação, por último. Busca objetos nos amigos (P2P) antes da nuvem. |
+| `core/src/p2p.rs` | Nó iroh: ALPN `pauletor3/mc/1` (túnel do jogo) e `pauletor3/sync/1` (manifestos, objetos, ping). Só membros conectam. |
+| `core/src/proxy.rs` | Proxy em `127.0.0.1`: lê o handshake do Minecraft e encaminha (local, túnel) ou responde o MOTD/aviso e acorda o mundo. |
+| `core/src/remote/crypt.rs` | Cifra XChaCha20-Poly1305 com a chave do mundo (viaja só no `#` do convite). |
+| `core/src/session.rs` | Orquestra jogar, checkpoints, fim de sessão, recuperação, failover, réplica em segundo plano. |
+| `coordinator/` | Worker + Durable Objects (SQLite). Um `WorldDO` por mundo serializa as operações (CAS de verdade). |
 
-### Envio (push)
-
-1. Varre o staging; o hash só é recalculado se tamanho ou mtime (ns) mudou.
-2. Cada objeto vai para `cache/objects/<sha256>` (hardlink).
-3. Lista `objects/` no remote e calcula o que falta.
-4. Reconfere o sha256 de cada objeto que vai subir.
-5. Envia em lote (`rclone copy --files-from-raw --no-traverse`, 4 transferências).
-6. Lista de novo e confirma **todos** os objetos do manifesto, com o tamanho certo.
-7. Grava o manifesto, relê e compara byte a byte.
-8. Confere a vez (`LockGuard::verify`) e se o HEAD ainda é o esperado. Só então grava o HEAD e relê.
-
-Se qualquer passo falha antes do 8, o HEAD não muda. Objetos que chegaram ficam como lixo até o próximo GC.
-
-### Download (pull)
-
-1. Lê o HEAD e o manifesto (manifestos são imutáveis e ficam em cache).
-2. Baixa os objetos que faltam para uma pasta temporária e confere o sha256 de cada um. Se algum não bater, tenta de novo uma vez; se persistir, aborta **sem tocar no mundo local**.
-3. Monta o mundo em `incoming/montagem-…`, conferindo o hash de novo durante a cópia, e restaura os mtimes.
-4. Troca atômica: `world` → `world.antigo-…`, montagem → `world`, apaga a antiga. Se a luz cair no meio, `repair_interrupted_swap` devolve a pasta anterior ao abrir.
-
-### Retenção e GC
-
-Mantém: o HEAD, o último manifesto de cada uma das **20 últimas sessões** e o último de **cada dia dos últimos 30 dias**. O GC apaga primeiro os manifestos fora da lista e depois os objetos sem referência. Ele só roda com a vez em mãos (ninguém hospedando), no fim de uma sessão (no máximo uma vez a cada 20 h) ou manualmente. Se algum manifesto estiver ilegível, o GC não apaga nada.
-
-## Ciclo de uma sessão
+## Sessão e failover
 
 ```mermaid
 sequenceDiagram
   autonumber
-  participant U as Jogador (host)
-  participant A as App
-  participant R as Remote (Drive)
-  participant S as Servidor
-  participant F as Amigos
-
-  U->>A: Jogar
-  A->>R: locks/: grava reivindicação, espera 6 s, confere, ativa
-  A->>R: HEAD + manifesto + objetos que faltam
-  A->>A: monta o mundo (troca atômica), confere Java/Fabric/Lithium por hash
-  A->>A: espelho inicial para o staging, state.dirty = true
-  A->>S: java … fabric-server-launch.jar (server-ip = IP do Tailscale)
-  S-->>A: "Done" no console
-  A->>R: DuckDNS → IP do Tailscale · Discord: "Mundo aberto"
-  F->>S: Multiplayer → pAuletOr 3
-  loop a cada 60 s
-    A->>R: heartbeat da trava (+ quem está online)
+  participant B as App do amigo (jogando)
+  participant W as Coordenação
+  participant A as App do host
+  A->>W: acquire (session_number = n)
+  loop a cada 10 s
+    A->>W: heartbeat(n)
   end
-  loop a cada 15 min
-    A->>S: save-off · save-all flush
-    A->>A: espelho incremental → staging
-    A->>S: save-on
-    A->>R: push (checkpoint) → novo HEAD
+  loop a cada 1–5 min
+    A->>A: save-off · save-all flush · espelho · save-on
+    A->>W: objetos + manifesto (cifrados)
+    A->>W: HEAD CAS (n, esperado) → novo HEAD
+    B->>A: réplica P2P do que mudou
   end
-  Note over A,S: Host fechou o Minecraft e o último amigo saiu (+2 min de tolerância)
-  A->>S: stop (RCON), espera o processo terminar
-  A->>R: push final (sessão) → HEAD → stats.json → GC
-  A->>R: apaga a trava (libera a vez)
-  A->>R: Discord: "Mundo salvo" com o tempo de cada um
+  Note over A: queda de energia
+  B--xA: ping falha (4 s)
+  Note over W: 30 s sem heartbeat nem aviso de membro → vez expira
+  B->>W: acquire (preferência para a réplica mais nova por 15 s)
+  W-->>B: session_number = n+1
+  B->>B: monta o HEAD (já está no cache) e sobe o servidor
+  Note over B: proxy dos amigos aponta para B
+  A->>W: (se voltar) HEAD CAS com n → lost_lock: vira manifesto solto
 ```
 
-### Passar a vez
+## Regras de segurança do mundo
 
-O host marca `handing_over` na trava, avisa no chat com contagem de 30 s, encerra e envia. No app dos amigos aparece **Assumir agora**: o app espera a trava sumir e então executa o fluxo de Jogar. Todos reconectam no mesmo endereço (o DuckDNS passa a apontar para o novo host).
+- **Nunca dois hosts:** a coordenação concede uma vez por vez (DO serializado). O host que perde contato por 25 s sem amigos conectados se encerra sozinho; com amigos conectados, eles “avisam” que o host vive e a vez não expira.
+- **Réplica velha nunca vence:** publicar exige o HEAD esperado e o `session_number` atual.
+- **Nada corrompe o oficial:** objetos conferidos por hash ao receber; HEAD gravado por último; montagem com troca atômica.
 
-### Quedas
+## Custos (plano grátis da Cloudflare)
 
-- **Do host, vista pelos amigos:** a trava fica "velha" quando o heartbeat tem mais de 5 min **e** a porta do jogo no IP do dono não responde. Aí o app oferece "Assumir o mundo", com explicação; nunca assume sozinho.
-- **Do próprio host:** ao reabrir, o app recupera. Envia o mundo local como "Recuperado após queda" e só publica como HEAD se ninguém tiver assumido depois. Ver [decisoes.md](decisoes.md#35-recuperação-de-queda).
-- **Desligamento do Windows:** `WM_QUERYENDSESSION` → `ShutdownBlockReasonCreate("Salvando o mundo pAuletOr 3…")` → encerra a sessão → libera o desligamento.
-
-## Pastas locais (na pasta de dados escolhida)
-
-```
-pAuletOr3/
-  config.json          configuração deste PC (sem segredos)
-  secrets.bin          segredos (DPAPI)
-  rclone.conf          config do rclone (criptografada pelo rclone)
-  state.json           qual manifesto o mundo local representa; sessão ativa
-  journal-queue.json   fila do diário do Discord
-  runtime/java-…       Java 21
-  server/              servidor (Fabric, Lithium, world/, logs/)
-  staging/             espelho consistente do mundo (origem dos envios)
-  cache/objects/       objetos por hash; cache/manifests/
-  recovered/           cópias de segurança de pastas substituídas
-  backups/             backups do servers.dat
-  logs/                logs do app (JSON, rotação diária, 14 dias) + console do servidor
-```
+Presença devolve a fotografia do mundo (1 pedido por ciclo); presença só em memória; heartbeat no disco no máximo a cada 15 s. Estimativa para 3–5 amigos: < 30 mil pedidos/dia (limite 100 mil) e < 20 mil linhas gravadas/dia (limite 100 mil). Armazenamento: até 4 GB por mundo (limite da conta: 5 GB).

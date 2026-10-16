@@ -1,4 +1,6 @@
-# Publica uma versão do app pAuletOr 3 (instalador NSIS assinado + latest.json do updater).
+# Publica uma versão do BUILD PADRÃO (online-mode=true) do app no GitHub.
+# O build pessoal (modo offline) NUNCA vai para cá: ele é publicado só no Worker do dono
+# (scripts/publicar-app.ps1), para quem tem convite.
 # Dispara ao enviar uma tag "v*" (ex.: v0.2.0). Segredos necessários no repositório:
 #   TAURI_SIGNING_PRIVATE_KEY           conteúdo do arquivo pauletor3-updater.key
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  senha da chave
@@ -24,9 +26,6 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: rclone (sidecar, com SHA-256 conferido)
-        shell: pwsh
-        run: ./scripts/baixar-rclone.ps1
       - name: dependências da interface
         working-directory: app
         run: npm ci

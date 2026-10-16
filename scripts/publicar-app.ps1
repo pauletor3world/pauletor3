@@ -26,12 +26,16 @@ Get-Content $saved | ForEach-Object { $k, $v = $_ -split "=", 2; $cfg[$k] = $v }
 $url = $cfg["ENDERECO"]; $admin = $cfg["CHAVE"]
 if (-not $url -or -not $admin) { Fail "scripts\.cache\coordenacao.txt incompleto; rode publicar-coordenacao.ps1 de novo." }
 
+function SetVersion($path, $pattern, $replacement) {
+  $full = Join-Path $root $path
+  $text = [IO.File]::ReadAllText($full)
+  $new = ([regex]$pattern).Replace($text, $replacement, 1)
+  [IO.File]::WriteAllText($full, $new, (New-Object System.Text.UTF8Encoding($false)))
+}
 if ($Versao) {
-  $conf = Get-Content app\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json
-  $conf.version = $Versao
-  $conf | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 app\src-tauri\tauri.conf.json
-  (Get-Content app\package.json -Raw) -replace '"version": "[^"]+"', "`"version`": `"$Versao`"" | Set-Content -Encoding utf8 app\package.json
-  (Get-Content Cargo.toml -Raw) -replace '(?m)^version = "[^"]+"', "version = `"$Versao`"" | Set-Content -Encoding utf8 Cargo.toml
+  SetVersion "app\src-tauri\tauri.conf.json" '"version": "[^"]+"' "`"version`": `"$Versao`""
+  SetVersion "app\package.json" '"version": "[^"]+"' "`"version`": `"$Versao`""
+  SetVersion "Cargo.toml" '(?m)^version = "[^"]+"' "version = `"$Versao`""
 } else {
   $Versao = (Get-Content app\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
 }
