@@ -38,9 +38,9 @@ if ($Versao) {
 git add -A
 git commit -m "pAuletOr 3 v$Versao" | Out-Null
 
-$existe = $true
-try { gh repo view $Repo | Out-Null } catch { $existe = $false }
-if (-not $existe) {
+# Comandos externos não disparam "catch" no PowerShell 5.1: usa o código de saída.
+gh repo view $Repo 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) {
   gh repo create $Repo --public --source . --remote origin --description "pAuletOr 3 — o nosso mundo de Minecraft, hospedado por turnos"
 }
 if (-not (git remote | Select-String origin)) { git remote add origin "https://github.com/$Repo.git" }
@@ -49,9 +49,11 @@ Get-Content (Join-Path $PastaChave "pauletor3-updater.key") -Raw | gh secret set
 Get-Content (Join-Path $PastaChave "senha-da-chave.txt") -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo $Repo
 
 git push -u origin main
+if ($LASTEXITCODE -ne 0) { throw "git push falhou" }
 
 # GitHub Pages (pasta docs/): página inicial e política de privacidade exigidas pelo Google OAuth.
-try { gh api -X POST "repos/$Repo/pages" -f "source[branch]=main" -f "source[path]=/docs" | Out-Null } catch { Write-Host "GitHub Pages já estava ligado." }
+gh api -X POST "repos/$Repo/pages" -f "source[branch]=main" -f "source[path]=/docs" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Host "GitHub Pages já estava ligado (ou será ligado manualmente)." }
 git tag "v$Versao"
 git push origin "v$Versao"
 Write-Host ""
