@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use pauletor3_core::lock::LockStatus;
+use pauletor3_core::coord::LeaseStatus;
 use pauletor3_core::session::{Phase, Status};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -46,10 +46,10 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
                 tauri::async_runtime::spawn(async move {
                     if let Some(e) = app.state::<crate::AppState>().engine() {
                         let st = e.status();
-                        let res = match st.lock {
-                            Some(LockStatus::Held { lock }) if lock.handing_over => e.take_turn(true).await,
-                            Some(LockStatus::Held { .. }) => Ok(()),
-                            _ => e.play(vec![], true).await,
+                        let res = match st.lease {
+                            Some(LeaseStatus::Held { lease }) if lease.handing_over => e.take_turn(true).await,
+                            // alguém hospeda: Jogar só abre o Minecraft (o proxy leva até o host)
+                            _ => e.play(true).await,
                         };
                         if let Err(err) = res {
                             tracing::warn!(error = %err, "Jogar pela bandeja falhou");
@@ -97,9 +97,11 @@ pub fn describe(st: &Status) -> String {
         Phase::WaitingTurn => return "Esperando a vez…".into(),
         _ => {}
     }
-    match &st.lock {
-        Some(LockStatus::Held { lock }) => format!("{} está hospedando · {} online", lock.player, lock.online.len()),
-        Some(LockStatus::Stale { lock }) => format!("A sessão de {} parece ter caído", lock.player),
+    if let Some(f) = &st.failover {
+        return f.clone();
+    }
+    match &st.lease {
+        Some(LeaseStatus::Held { lease }) => format!("{} está hospedando · {} online", lease.player, lease.online.len()),
         _ => "Livre — ninguém jogando".into(),
     }
 }
@@ -125,10 +127,10 @@ pub fn update(app: &AppHandle, st: &Status) {
     }
     let _ = tray.set_tooltip(Some(format!("pAuletOr 3 — {}", describe(st))));
     let idle = matches!(st.phase, Phase::Idle);
-    let (play_text, play_on) = match &st.lock {
-        _ if st.me_hosting => ("Hospedando…", false),
-        Some(LockStatus::Held { lock }) if lock.handing_over => ("Assumir agora", idle),
-        Some(LockStatus::Held { .. }) => ("Entrar no mundo", false),
+    let (play_text, play_on) = match &st.lease {
+        _ if st.me_hosting => ("Abrir o Minecraft", true),
+        Some(LeaseStatus::Held { lease }) if lease.handing_over => ("Assumir agora", idle),
+        Some(LeaseStatus::Held { .. }) => ("Jogar", true),
         _ => ("Jogar", idle && st.configured),
     };
     let _ = items.play.set_text(play_text);

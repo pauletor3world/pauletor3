@@ -34,8 +34,8 @@
       "nsis"
     ],
     "publisher": "pAuletOr 3",
-    "shortDescription": "O nosso mundo de Minecraft, hospedado por turnos",
-    "longDescription": "Hospede o mundo pAuletOr 3 por turnos, com sincronização segura na nuvem, sem servidor ligado o tempo todo.",
+    "shortDescription": "O nosso mundo de Minecraft, sempre no ar entre amigos",
+    "longDescription": "O mundo fica nos PCs do grupo e numa cópia cifrada na nuvem. Quem clica em Jogar hospeda; se o host sair, outro assume sozinho.",
     "copyright": "pAuletOr 3",
     "category": "Game",
     "icon": [
@@ -44,9 +44,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "externalBin": [
-      "binaries/rclone"
     ],
     "createUpdaterArtifacts": true,
     "windows": {
@@ -73,6 +70,13 @@
       ],
       "windows": {
         "installMode": "passive"
+      }
+    },
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "pauletor3"
+        ]
       }
     }
   }

@@ -26,6 +26,8 @@ pub struct AppState {
     pub console: Mutex<VecDeque<String>>,
     pub quitting: AtomicBool,
     pub start_minimized: bool,
+    /// Convite recebido por link (`pauletor3://entrar/...`) esperando o assistente.
+    pub pending_invite: Mutex<Option<String>>,
     log_guard: Mutex<Option<tracing_appender_guard::Guard>>,
 }
 
@@ -38,17 +40,6 @@ impl AppState {
     pub fn engine(&self) -> Option<Arc<Engine>> {
         self.engine.read().unwrap().clone()
     }
-}
-
-/// Caminho do rclone que vai junto com o app (sidecar).
-pub fn rclone_path() -> PathBuf {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())).unwrap_or_default();
-    let candidates = [
-        exe_dir.join("rclone.exe"),
-        exe_dir.join("rclone-x86_64-pc-windows-msvc.exe"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join("rclone-x86_64-pc-windows-msvc.exe"),
-    ];
-    candidates.iter().find(|p| p.exists()).cloned().unwrap_or_else(|| exe_dir.join("rclone.exe"))
 }
 
 /// Abre (ou reabre) o motor na pasta de dados escolhida.
@@ -69,14 +60,7 @@ pub fn open_engine(app: &AppHandle, data_dir: PathBuf) -> anyhow::Result<Arc<Eng
             }
         }
     }
-    // Só para desenvolvimento/demonstração: usa uma pasta local como "nuvem".
-    let engine = match std::env::var_os("PAULETOR3_LOCAL_REMOTE") {
-        Some(dir) => {
-            let r = pauletor3_core::remote::RcloneRemote::local(rclone_path(), std::path::Path::new(&dir), p.tmp());
-            Engine::with_remote(p, Arc::new(r), event_sink(app.clone()))?
-        }
-        None => Engine::open(p, rclone_path(), event_sink(app.clone()))?,
-    };
+    let engine = Engine::open(p, event_sink(app.clone()))?;
     *state.engine.write().unwrap() = Some(engine.clone());
     start_background(app.clone(), engine.clone());
     Ok(engine)
@@ -127,34 +111,43 @@ fn event_sink(app: AppHandle) -> EventSink {
     })
 }
 
-/// Tarefas de fundo: diário, atualização periódica do estado e recuperação pendente.
+/// Tarefas de fundo: diário, recuperação pendente e a rede (presença, proxy local, réplica e
+/// troca automática de host — o laço mora no núcleo).
 fn start_background(app: AppHandle, engine: Arc<Engine>) {
     tauri::async_runtime::spawn(engine.journal.clone().run());
-    let e2 = engine.clone();
     tauri::async_runtime::spawn(async move {
-        // Recuperação automática de uma sessão que caiu neste PC.
-        let cfg = e2.config.read().await.clone();
-        if cfg.setup_complete && e2.status().recovery_pending {
-            if let Err(err) = e2.recover().await {
+        let cfg = engine.config.read().await.clone();
+        if !cfg.setup_complete {
+            return;
+        }
+        if engine.status().recovery_pending {
+            if let Err(err) = engine.recover().await {
                 tracing::error!(error = %err, "recuperação automática falhou");
             }
         }
-        loop {
-            let st = e2.status();
-            if e2.config.read().await.setup_complete {
-                if let Err(err) = e2.refresh().await {
-                    tracing::debug!(error = %err, "refresh falhou");
+        // tenta até a rede subir (sem internet no boot, por exemplo)
+        for attempt in 0..u32::MAX {
+            match engine.start_network().await {
+                Ok(()) => break,
+                Err(err) => {
+                    tracing::warn!(error = %err, attempt, "rede P2P não iniciou; tentando de novo");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             }
-            let wait = match st.phase {
-                Phase::WaitingTurn => 5,
-                _ if st.me_hosting => 30,
-                _ => 20,
-            };
-            tokio::time::sleep(Duration::from_secs(wait)).await;
         }
+        let _ = app;
     });
-    let _ = app;
+}
+
+/// Recebe um link `pauletor3://entrar/...` (app aberto pelo convite).
+fn handle_deep_links(app: &AppHandle, urls: Vec<String>) {
+    for u in urls {
+        if u.starts_with("pauletor3://") {
+            *app.state::<AppState>().pending_invite.lock().unwrap() = Some(u.clone());
+            let _ = app.emit("p3://invite", u);
+            show_main(app);
+        }
+    }
 }
 
 pub fn show_main(app: &AppHandle) {
@@ -189,7 +182,9 @@ pub fn run() {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
     pauletor3_core::shutdown::request_early_notification();
     tauri::Builder::default()
+        // precisa ser o primeiro plugin; com "deep-link", o link chega ao app que já está aberto
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--minimized"]),
@@ -205,11 +200,22 @@ pub fn run() {
             console: Mutex::new(VecDeque::new()),
             quitting: AtomicBool::new(false),
             start_minimized,
+            pending_invite: Mutex::new(None),
             log_guard: Mutex::new(None),
         })
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(debug_assertions)]
+                let _ = app.deep_link().register_all();
+                if let Ok(Some(urls)) = app.deep_link().get_current() {
+                    handle_deep_links(&handle, urls.into_iter().map(|u| u.to_string()).collect());
+                }
+                let h2 = handle.clone();
+                app.deep_link().on_open_url(move |ev| handle_deep_links(&h2, ev.urls().into_iter().map(|u| u.to_string()).collect()));
+            }
             if let Some(dir) = paths::resolve_data_dir() {
                 if let Err(e) = open_engine(&handle, dir) {
                     tracing::error!(error = %e, "não consegui abrir a pasta de dados");
@@ -238,6 +244,7 @@ pub fn run() {
             commands::get_status,
             commands::refresh,
             commands::play,
+            commands::open_game,
             commands::take_turn,
             commands::pass_turn,
             commands::stop_session,
@@ -251,7 +258,12 @@ pub fn run() {
             commands::diagnostics,
             commands::get_settings,
             commands::save_settings,
-            commands::set_secret,
+            commands::get_private,
+            commands::set_webhook,
+            commands::invites,
+            commands::revoke_invite,
+            commands::set_member,
+            commands::diary,
             commands::get_world_settings,
             commands::save_world_settings,
             commands::console_cmd,
@@ -267,21 +279,13 @@ pub fn run() {
             commands::hide_window,
             setup::setup_suggest_dir,
             setup::setup_init,
-            setup::drive_authorize,
-            setup::world_probe,
-            setup::import_world,
+            setup::invite_preview,
             setup::create_world,
-            setup::tailscale_status,
-            setup::tailscale_install,
-            setup::tailscale_up,
-            setup::save_network,
-            setup::test_duckdns,
-            setup::install_firewall,
-            setup::remove_firewall,
+            setup::join_world,
+            setup::probe_world_folder,
+            setup::make_invite,
             setup::ensure_serversdat,
             setup::prepare_runtime,
-            setup::create_invite,
-            setup::accept_invite,
             setup::finish_setup,
         ])
         .build(tauri::generate_context!())

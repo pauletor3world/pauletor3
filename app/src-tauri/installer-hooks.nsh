@@ -1,7 +1,7 @@
 ; Ganchos do instalador NSIS do pAuletOr 3.
-; Na desinstalação, remove as regras de firewall criadas pelo app (só funcionam se o
-; desinstalador tiver permissão de administrador; caso contrário, o botão
-; "Remover regras do firewall" nas Configurações faz isso antes de desinstalar).
+; A v2 não cria regra de firewall nem abre porta (o servidor só escuta em 127.0.0.1).
+; Na desinstalação, remove as regras que a v1 possa ter deixado (exige administrador;
+; sem permissão, não faz nada).
 
 !macro NSIS_HOOK_POSTUNINSTALL
   nsExec::Exec 'netsh advfirewall firewall delete rule name="pAuletOr 3 - Minecraft (somente Tailscale)"'

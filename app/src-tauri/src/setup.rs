@@ -1,18 +1,16 @@
-//! Assistentes: primeira configuração do dono e entrada de um amigo pelo convite.
+//! Primeira execução: o dono cria o mundo; um amigo entra pelo convite. Nada de contas de
+//! terceiros, rede ou portas: só a pasta, o nick e (para o dono) o endereço da coordenação.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use pauletor3_core::config::Config;
+use pauletor3_core::coord::InviteOptions;
 use pauletor3_core::events::quiet;
-use pauletor3_core::invite::{self, InvitePayload};
-use pauletor3_core::manifest::ManifestSummary;
-use pauletor3_core::remote::rclone::setup as rclone_setup;
+use pauletor3_core::invite::Invite;
 use pauletor3_core::session::Engine;
-use pauletor3_core::sync::SyncEngine;
-use pauletor3_core::tailscale;
-use pauletor3_core::versions::{Versions, WorldSettings};
-use pauletor3_core::{firewall, java, paths, server, util};
+use pauletor3_core::versions::Versions;
+use pauletor3_core::{java, paths, server, util};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
@@ -26,10 +24,12 @@ pub struct SetupSuggestion {
     pub minecraft_dir: Option<String>,
     pub launchers: Vec<pauletor3_core::launcher::LauncherCandidate>,
     pub free_space: Option<u64>,
+    /// Convite que abriu o app (link `pauletor3://...`), se houver.
+    pub pending_invite: Option<String>,
 }
 
 #[tauri::command]
-pub async fn setup_suggest_dir() -> CmdResult<SetupSuggestion> {
+pub async fn setup_suggest_dir(state: State<'_, AppState>) -> CmdResult<SetupSuggestion> {
     let suggested = paths::suggest_data_dir();
     let parent = suggested.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| suggested.clone());
     Ok(SetupSuggestion {
@@ -38,24 +38,21 @@ pub async fn setup_suggest_dir() -> CmdResult<SetupSuggestion> {
         existing_dir: paths::resolve_data_dir().map(|p| p.display().to_string()),
         minecraft_dir: pauletor3_core::config::default_minecraft_dir().map(|p| p.display().to_string()),
         launchers: pauletor3_core::launcher::detect(),
+        pending_invite: state.pending_invite.lock().unwrap().clone(),
     })
 }
 
 #[derive(Deserialize)]
 pub struct SetupInit {
     pub data_dir: String,
-    pub player_name: String,
     pub eula: bool,
-    pub owner: bool,
     pub minecraft_dir: Option<String>,
     pub launcher_path: Option<String>,
 }
 
+/// Escolhe a pasta de dados, aceita o EULA e guarda onde está o Minecraft.
 #[tauri::command]
 pub async fn setup_init(app: AppHandle, args: SetupInit) -> CmdResult<()> {
-    if !Config::is_valid_player_name(&args.player_name) {
-        return Err(CmdError::msg("Nick inválido", "Use exatamente o nick do Minecraft: 3 a 16 letras, números ou _."));
-    }
     if !args.eula {
         return Err(CmdError::msg("É preciso aceitar o EULA", "Sem isso o servidor do Minecraft não pode rodar."));
     }
@@ -67,9 +64,7 @@ pub async fn setup_init(app: AppHandle, args: SetupInit) -> CmdResult<()> {
     paths::save_data_dir(&dir)?;
     let e = crate::open_engine(&app, dir)?;
     e.update_config(|c| {
-        c.player_name = args.player_name.clone();
         c.eula_accepted = true;
-        c.is_owner = args.owner;
         if let Some(m) = args.minecraft_dir.filter(|s| !s.is_empty()) {
             c.minecraft_dir = Some(m.into());
         }
@@ -82,268 +77,91 @@ pub async fn setup_init(app: AppHandle, args: SetupInit) -> CmdResult<()> {
     Ok(())
 }
 
-async fn write_remote(e: &Arc<Engine>, backend: &str, params: Vec<(String, String)>) -> CmdResult<()> {
-    let pass = util::random_token(40);
-    rclone_setup::create_encrypted_config(e.rclone_bin(), &e.rclone_config_path(), &pass, backend, &params).await?;
-    let json = serde_json::to_string(&params).map_err(|err| CmdError::msg("Erro interno", err.to_string()))?;
-    e.update_secrets(|s| {
-        s.rclone_config_pass = Some(pass);
-        s.remote_backend = Some(backend.to_string());
-        s.remote_params_json = Some(json);
-    })
-    .await?;
-    // Testa de verdade: lista a pasta do mundo.
-    let r = e.remote().await?;
-    r.list("").await.map_err(|err| CmdError::msg("A nuvem não respondeu", err.to_string()))?;
-    Ok(())
-}
-
-/// Abre o navegador para o login do Google (conta dedicada ao mundo) e conecta o remote.
-/// Com client ID próprio, usa o escopo mínimo `drive.file`: o app só enxerga o que ele mesmo criou.
-#[tauri::command]
-pub async fn drive_authorize(state: State<'_, AppState>, client_id: Option<String>, client_secret: Option<String>) -> CmdResult<()> {
-    let e = engine(&state)?;
-    let id = client_id.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let secret = client_secret.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let client = match (&id, &secret) {
-        (Some(i), Some(s)) => {
-            if !i.ends_with(".apps.googleusercontent.com") {
-                return Err(CmdError::msg("Client ID inválido", "Ele termina com .apps.googleusercontent.com"));
-            }
-            Some((i.as_str(), s.as_str()))
-        }
-        (None, None) => None,
-        _ => return Err(CmdError::msg("Falta uma parte", "Informe o Client ID e o Client secret juntos.")),
-    };
-    let token = rclone_setup::authorize_drive(e.rclone_bin(), client).await?;
-    let mut params = vec![("token".to_string(), token)];
-    match client {
-        Some((i, s)) => {
-            params.push(("scope".into(), "drive.file".into()));
-            params.push(("client_id".into(), i.to_string()));
-            params.push(("client_secret".into(), s.to_string()));
-        }
-        None => params.push(("scope".into(), "drive".into())),
+fn check_nick(nick: &str) -> CmdResult<()> {
+    if !Config::is_valid_player_name(nick) {
+        return Err(CmdError::msg("Nick inválido", "Use exatamente o nick do Minecraft: 3 a 16 letras, números ou _."));
     }
-    write_remote(&e, "drive", params).await
-}
-
-#[derive(Serialize)]
-pub struct WorldProbe {
-    pub has_world: bool,
-    pub head: Option<ManifestSummary>,
-    pub settings: Option<WorldSettings>,
-    pub versions: Option<Versions>,
-}
-
-#[tauri::command]
-pub async fn world_probe(state: State<'_, AppState>) -> CmdResult<WorldProbe> {
-    let e = engine(&state)?;
-    let r = e.remote().await?;
-    let se = SyncEngine::new(r.clone(), e.paths.clone());
-    let head = match se.head().await? {
-        Some(h) => Some(se.fetch_manifest(&h.manifest).await?.summary()),
-        None => None,
-    };
-    Ok(WorldProbe {
-        has_world: head.is_some(),
-        head,
-        settings: WorldSettings::load(&*r).await?,
-        versions: Versions::load(&*r).await?,
-    })
-}
-
-#[tauri::command]
-pub async fn import_world(state: State<'_, AppState>, folder: String) -> CmdResult<pauletor3_core::players::LevelInfo> {
-    let e = engine(&state)?;
-    let f = PathBuf::from(&folder);
-    let info = pauletor3_core::players::level_info(&f).map_err(|err| CmdError::msg("Essa pasta não é um mundo", err.to_string()))?;
-    e.import_world(f).await?;
-    Ok(info)
-}
-
-#[tauri::command]
-pub async fn create_world(state: State<'_, AppState>, settings: WorldSettings) -> CmdResult<()> {
-    let e = engine(&state)?;
-    let r = e.remote().await?;
-    if Versions::load(&*r).await?.is_none() {
-        Versions::builtin().save(&*r).await?;
-    }
-    e.save_world_settings(settings).await?;
     Ok(())
 }
 
 #[derive(Serialize)]
-pub struct WorldNet {
-    #[serde(flatten)]
-    pub status: tailscale::Status,
-    pub world_tailnet: Option<String>,
-    /// Este PC está conectado à rede do mundo.
-    pub on_world: bool,
+pub struct InvitePreview {
+    pub world_id: String,
+    pub host: String,
 }
 
+/// Confere um convite colado (sem gastar o uso).
 #[tauri::command]
-pub async fn tailscale_status(state: State<'_, AppState>) -> CmdResult<WorldNet> {
-    let st = tailscale::status().await;
-    let world = match state.engine() {
-        Some(e) => e.config.read().await.world_tailnet.clone(),
-        None => None,
-    };
-    let on_world = world.is_some() && tailscale::on_world(&st, world.as_deref());
-    Ok(WorldNet { status: st, world_tailnet: world, on_world })
-}
-
-pub async fn install_tailscale_inner(e: &Arc<Engine>) -> CmdResult<()> {
-    if tailscale::cli_path().is_some() {
-        return Ok(());
-    }
-    let dest = e.paths.downloads().join("tailscale-setup.exe");
-    tailscale::download_installer(&dest).await?;
-    // O instalador oficial pede permissão de administrador (UAC).
-    let ps = format!(
-        "$p = Start-Process -FilePath '{}' -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
-        dest.display().to_string().replace('\'', "''")
-    );
-    let out = util::command("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps])
-        .output()
-        .await
-        .map_err(|err| CmdError::msg("Não consegui abrir o instalador", err.to_string()))?;
-    let _ = std::fs::remove_file(&dest);
-    for _ in 0..30 {
-        if tailscale::cli_path().is_some() {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
-    Err(CmdError::msg(
-        "O Tailscale não foi instalado",
-        format!("O instalador terminou sem instalar (código {:?}). Tente de novo e aceite a permissão.", out.status.code()),
-    ))
-}
-
-#[tauri::command]
-pub async fn tailscale_install(state: State<'_, AppState>) -> CmdResult<()> {
-    install_tailscale_inner(&engine(&state)?).await
-}
-
-/// Entra na rede do mundo com a chave (do convite ou do dono), como um perfil a mais do
-/// Tailscale: as outras redes deste PC continuam disponíveis.
-#[tauri::command]
-pub async fn tailscale_up(state: State<'_, AppState>, auth_key: Option<String>) -> CmdResult<WorldNet> {
-    let e = engine(&state)?;
-    let typed = auth_key.map(|k| k.trim().to_string()).filter(|k| !k.is_empty());
-    if let Some(k) = &typed {
-        if !k.starts_with("tskey-") {
-            return Err(CmdError::msg("Chave inválida", "A auth key do Tailscale começa com tskey-auth-."));
-        }
-        let k2 = k.clone();
-        e.update_secrets(|s| s.tailscale_auth_key = Some(k2)).await?;
-    }
-    let key = e.secrets().await.tailscale_auth_key.clone();
-    let (name, world) = {
-        let c = e.config.read().await;
-        (c.player_name.clone(), c.world_tailnet.clone())
-    };
-    let t = tailscale::join_world(key.as_deref(), &name, world.as_deref()).await?;
-    let t2 = t.clone();
-    e.update_config(|c| c.world_tailnet = Some(t2)).await?;
-    let st = tailscale::status().await;
-    let on_world = tailscale::on_world(&st, Some(&t));
-    Ok(WorldNet { status: st, world_tailnet: Some(t), on_world })
+pub async fn invite_preview(invite: String) -> CmdResult<InvitePreview> {
+    let inv = Invite::parse(&invite).map_err(|_| CmdError::msg("Convite inválido", "Copie o link inteiro (com a parte depois do #) ou o código P3J1."))?;
+    Ok(InvitePreview { world_id: inv.world_id().to_string(), host: inv.base.clone() })
 }
 
 #[derive(Deserialize)]
-pub struct NetworkArgs {
-    pub duckdns_domain: Option<String>,
-    pub duckdns_token: Option<String>,
-    pub discord_webhook: Option<String>,
-    pub tailscale_auth_key: Option<String>,
-    pub tailscale_key_expires: Option<chrono::NaiveDate>,
+pub struct CreateWorldArgs {
+    pub coordinator_url: String,
+    pub admin_token: String,
+    pub name: String,
+    pub nick: String,
+    /// Pasta de um mundo existente para importar (opcional).
+    pub folder: Option<String>,
 }
 
-fn clean(v: Option<String>) -> Option<String> {
-    v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
-}
-
+/// O dono cria o mundo (e importa uma pasta, se escolheu).
 #[tauri::command]
-pub async fn save_network(state: State<'_, AppState>, args: NetworkArgs) -> CmdResult<()> {
+pub async fn create_world(state: State<'_, AppState>, args: CreateWorldArgs) -> CmdResult<()> {
+    check_nick(&args.nick)?;
+    let url = args.coordinator_url.trim().trim_end_matches('/').to_string();
+    if !(url.starts_with("https://") || url.starts_with("http://127.0.0.1") || url.starts_with("http://localhost")) {
+        return Err(CmdError::msg("Endereço inválido", "Cole o endereço que o script de publicação mostrou (começa com https://)."));
+    }
     let e = engine(&state)?;
-    let domain = clean(args.duckdns_domain);
-    if let Some(d) = &domain {
-        if !pauletor3_core::duckdns::is_valid_subdomain(d) {
-            return Err(CmdError::msg("Nome do DuckDNS inválido", "Use só o nome, por exemplo: pauletor3"));
+    let folder = args.folder.filter(|f| !f.trim().is_empty()).map(PathBuf::from);
+    if let Some(f) = &folder {
+        if !f.join("level.dat").exists() {
+            return Err(CmdError::msg("Essa pasta não é um mundo", "Escolha a pasta que tem o arquivo level.dat dentro."));
         }
     }
-    let webhook = clean(args.discord_webhook);
-    if let Some(w) = &webhook {
-        if !pauletor3_core::journal::is_valid_webhook(w) {
-            return Err(CmdError::msg("Webhook inválido", "A URL começa com https://discord.com/api/webhooks/"));
-        }
-    }
-    let token = clean(args.duckdns_token);
-    let key = clean(args.tailscale_auth_key);
-    e.update_secrets(|s| {
-        if token.is_some() {
-            s.duckdns_token = token.clone();
-        }
-        if webhook.is_some() {
-            s.discord_webhook = webhook.clone();
-        }
-        if key.is_some() {
-            s.tailscale_auth_key = key.clone();
-        }
-    })
-    .await?;
-    e.update_config(|c| {
-        if let Some(d) = &domain {
-            c.duckdns_domain = Some(pauletor3_core::duckdns::subdomain(d));
-        }
-        if args.tailscale_key_expires.is_some() {
-            c.tailscale_key_expires = args.tailscale_key_expires;
-        }
-    })
-    .await?;
+    e.create_world(&url, args.admin_token.trim(), args.name.trim(), &args.nick, folder).await?;
+    e.start_network().await?;
     Ok(())
 }
 
-#[derive(Serialize)]
-pub struct DuckTest {
-    pub address: String,
-    pub resolved: Vec<String>,
-    pub expected: String,
-}
-
-/// Atualiza o DuckDNS com o IP do Tailscale deste PC e confere a resolução.
+/// Um amigo entra pelo convite.
 #[tauri::command]
-pub async fn test_duckdns(state: State<'_, AppState>) -> CmdResult<DuckTest> {
+pub async fn join_world(state: State<'_, AppState>, invite: String, nick: String) -> CmdResult<pauletor3_core::coord::http::JoinResult> {
+    check_nick(&nick)?;
     let e = engine(&state)?;
-    let domain = e.config.read().await.duckdns_domain.clone().ok_or_else(|| CmdError::msg("Sem domínio", "Informe o nome no DuckDNS."))?;
-    let token = e.secrets().await.duckdns_token.clone().ok_or_else(|| CmdError::msg("Sem token", "Cole o token do DuckDNS."))?;
-    let ip = tailscale::my_ip().await?;
-    pauletor3_core::duckdns::update(&domain, &token, &ip).await?;
-    let mut resolved = vec![];
-    for _ in 0..10 {
-        resolved = pauletor3_core::duckdns::resolve(&domain).await.unwrap_or_default().iter().map(|i| i.to_string()).collect();
-        if resolved.contains(&ip) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let r = e.join_world(&invite, &nick).await?;
+    *state.pending_invite.lock().unwrap() = None;
+    e.start_network().await?;
+    Ok(r)
+}
+
+/// Lê o nível de uma pasta de mundo (para mostrar antes de importar).
+#[tauri::command]
+pub async fn probe_world_folder(folder: String) -> CmdResult<pauletor3_core::players::LevelInfo> {
+    let f = PathBuf::from(folder);
+    if !f.join("level.dat").exists() {
+        return Err(CmdError::msg("Essa pasta não é um mundo", "Escolha a pasta que tem o arquivo level.dat dentro."));
     }
-    Ok(DuckTest { address: pauletor3_core::duckdns::fqdn(&domain), resolved, expected: ip })
+    let info = pauletor3_core::players::level_info(&f)?;
+    let v = Versions::builtin();
+    if info.data_version > v.world_data_version {
+        return Err(CmdError::msg(
+            "Mundo de uma versão mais nova",
+            format!("O mundo é do Minecraft {} e o servidor é {}; abrir causaria perda de dados.", info.version_name, v.minecraft),
+        ));
+    }
+    Ok(info)
 }
 
+/// Link de convite novo (dono).
 #[tauri::command]
-pub async fn install_firewall() -> CmdResult<()> {
-    firewall::install_rules().await?;
-    Ok(())
-}
-
-/// Remove as regras criadas pelo app (antes de desinstalar).
-#[tauri::command]
-pub async fn remove_firewall() -> CmdResult<()> {
-    firewall::run_elevated(&firewall::remove_commands()).await?;
-    Ok(())
+pub async fn make_invite(state: State<'_, AppState>, hours: Option<u32>, uses: Option<u32>, approval: Option<bool>) -> CmdResult<String> {
+    let e = engine(&state)?;
+    let opts = InviteOptions { hours: hours.unwrap_or(48), uses: uses.unwrap_or(5), preapproved: !approval.unwrap_or(false) };
+    Ok(e.create_invite(opts).await?.1)
 }
 
 #[tauri::command]
@@ -352,93 +170,33 @@ pub async fn ensure_serversdat(app: AppHandle, state: State<'_, AppState>) -> Cm
 }
 
 pub async fn prepare_runtime_inner(e: &Arc<Engine>) -> CmdResult<()> {
-    let r = e.remote().await?;
-    let v = Versions::load(&*r).await?.unwrap_or_else(Versions::builtin);
-    let progress = {
-        let e = e.clone();
-        let _ = e;
-        quiet()
+    let v = match e.backend().await {
+        Ok(b) => Versions::load(&*b.remote).await?.unwrap_or_else(Versions::builtin),
+        Err(_) => Versions::builtin(),
     };
-    java::ensure_java(&e.paths, &v, progress.clone()).await?;
-    server::prepare(&e.paths, &v, progress).await?;
+    java::ensure_java(&e.paths, &v, quiet()).await?;
+    server::prepare(&e.paths, &v, quiet()).await?;
     server::verify_install(&e.paths, &v)?;
     Ok(())
 }
 
+/// Baixa Java e servidor com antecedência (para o primeiro Jogar ser rápido).
 #[tauri::command]
 pub async fn prepare_runtime(state: State<'_, AppState>) -> CmdResult<()> {
     prepare_runtime_inner(&engine(&state)?).await
 }
 
 #[tauri::command]
-pub async fn create_invite(state: State<'_, AppState>, password: String) -> CmdResult<String> {
-    let e = engine(&state)?;
-    let c = e.config.read().await.clone();
-    if !c.is_owner {
-        return Err(CmdError::msg("Só o dono gera convites", "Peça um convite ao dono do mundo."));
-    }
-    let s = e.secrets().await;
-    let backend = s.remote_backend.clone().ok_or_else(|| CmdError::msg("Nuvem não conectada", "Conecte o Google Drive primeiro."))?;
-    let params: Vec<(String, String)> = s
-        .remote_params_json
-        .as_deref()
-        .and_then(|j| serde_json::from_str(j).ok())
-        .ok_or_else(|| CmdError::msg("Nuvem não conectada", "Conecte o Google Drive primeiro."))?;
-    let payload = InvitePayload {
-        world_name: e.status().world_name,
-        remote_backend: backend,
-        remote_params: params,
-        remote_root: c.remote_root.clone(),
-        tailscale_auth_key: s.tailscale_auth_key.clone(),
-        tailscale_key_expires: c.tailscale_key_expires,
-        tailscale_tailnet: c.world_tailnet.clone(),
-        duckdns_domain: c.duckdns_domain.clone(),
-        duckdns_token: s.duckdns_token.clone(),
-        discord_webhook: s.discord_webhook.clone(),
-        created_by: c.player_name.clone(),
-        created_at: chrono::Utc::now(),
-    };
-    invite::seal(&payload, &password).map_err(|err| CmdError::msg("Não consegui gerar o convite", err.to_string()))
-}
-
-#[derive(Serialize)]
-pub struct InviteAccepted {
-    pub world_name: String,
-    pub created_by: String,
-    pub has_tailscale_key: bool,
-}
-
-#[tauri::command]
-pub async fn accept_invite(state: State<'_, AppState>, code: String, password: String) -> CmdResult<InviteAccepted> {
-    let e = engine(&state)?;
-    let p = invite::open(&code, &password).map_err(|err| CmdError::msg("Convite não abriu", err.to_string()))?;
-    // A pasta do mundo no remote precisa estar definida antes do teste de conexão.
-    let root = p.remote_root.clone();
-    e.update_config(|c| c.remote_root = root).await?;
-    write_remote(&e, &p.remote_backend, p.remote_params.clone()).await?;
-    let (ts, dd, wh) = (p.tailscale_auth_key.clone(), p.duckdns_token.clone(), p.discord_webhook.clone());
-    e.update_secrets(|s| {
-        s.tailscale_auth_key = ts;
-        s.duckdns_token = dd;
-        s.discord_webhook = wh;
-    })
-    .await?;
-    let (root, domain, exp, tailnet) = (p.remote_root.clone(), p.duckdns_domain.clone(), p.tailscale_key_expires, p.tailscale_tailnet.clone());
-    e.update_config(|c| {
-        c.remote_root = root;
-        c.world_tailnet = tailnet;
-        c.duckdns_domain = domain;
-        c.tailscale_key_expires = exp;
-        c.is_owner = false;
-    })
-    .await?;
-    Ok(InviteAccepted { world_name: p.world_name.clone(), created_by: p.created_by.clone(), has_tailscale_key: p.tailscale_auth_key.is_some() })
-}
-
-#[tauri::command]
 pub async fn finish_setup(state: State<'_, AppState>) -> CmdResult<()> {
     let e = engine(&state)?;
     e.update_config(|c| c.setup_complete = true).await?;
+    // a entrada "pAuletOr 3" no Minecraft (localhost) já pode existir desde agora
+    let cfg = e.config.read().await.clone();
+    if let Some(mc) = &cfg.minecraft_dir {
+        if !pauletor3_core::launcher::client_running(None) {
+            let _ = pauletor3_core::serversdat::ensure_entry(mc, &cfg.game_address(), &e.paths.backups());
+        }
+    }
     let _ = e.refresh().await;
     Ok(())
 }

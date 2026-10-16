@@ -13,6 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "pauletor3"
 path = "src/main.rs"
 
+[features]
+default = []
+# Build pessoal (modo offline do servidor). Nunca distribuído.
+personal = ["pauletor3-core/personal"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -22,7 +27,8 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-single-instance = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-process = "2"
