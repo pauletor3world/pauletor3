@@ -45,8 +45,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 if (-not (git remote | Select-String origin)) { git remote add origin "https://github.com/$Repo.git" }
 
-Get-Content (Join-Path $PastaChave "pauletor3-updater.key") -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY --repo $Repo
-Get-Content (Join-Path $PastaChave "senha-da-chave.txt") -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo $Repo
+# --body em vez de pipe: o pipe do PowerShell 5.1 acrescenta um BOM e estraga a chave.
+gh secret set TAURI_SIGNING_PRIVATE_KEY --repo $Repo --body (Get-Content (Join-Path $PastaChave "pauletor3-updater.key") -Raw).Trim()
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo $Repo --body (Get-Content (Join-Path $PastaChave "senha-da-chave.txt") -Raw).Trim()
 
 git push -u origin main
 if ($LASTEXITCODE -ne 0) { throw "git push falhou" }
