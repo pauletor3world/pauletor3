@@ -1,4 +1,4 @@
-# Baixa o rclone fixado e confere o SHA-256 antes de colocá-lo como sidecar do app.
+﻿# Baixa o rclone fixado e confere o SHA-256 antes de colocá-lo como sidecar do app.
 # Uso: powershell -ExecutionPolicy Bypass -File scripts\baixar-rclone.ps1
 $ErrorActionPreference = 'Stop'
 $version = 'v1.75.2'

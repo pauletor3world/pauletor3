@@ -1,4 +1,4 @@
-# Publica o pAuletOr 3 no GitHub (uma vez) e lança uma versão.
+﻿# Publica o pAuletOr 3 no GitHub (uma vez) e lança uma versão.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\publicar.ps1            # primeira vez
 #   powershell -ExecutionPolicy Bypass -File scripts\publicar.ps1 -Versao 0.2.0
