@@ -1,0 +1,38 @@
+# Testes e lint a cada push / pull request.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rclone (para os testes de integração)
+        shell: pwsh
+        run: ./scripts/baixar-rclone.ps1
+      - name: interface
+        working-directory: app
+        run: |
+          npm ci
+          npm run typecheck
+          npm run lint
+          npm run build
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: testes
+        env:
+          PAULETOR3_RCLONE: ${{ github.workspace }}\app\src-tauri\binaries\rclone-x86_64-pc-windows-msvc.exe
+        run: cargo test -p pauletor3-core

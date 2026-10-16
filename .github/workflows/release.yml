@@ -1,0 +1,45 @@
+# Publica uma versão do app pAuletOr 3 (instalador NSIS assinado + latest.json do updater).
+# Dispara ao enviar uma tag "v*" (ex.: v0.2.0). Segredos necessários no repositório:
+#   TAURI_SIGNING_PRIVATE_KEY           conteúdo do arquivo pauletor3-updater.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  senha da chave
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rclone (sidecar, com SHA-256 conferido)
+        shell: pwsh
+        run: ./scripts/baixar-rclone.ps1
+      - name: dependências da interface
+        working-directory: app
+        run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: "pAuletOr 3 ${{ github.ref_name }}"
+          releaseBody: "Baixe o instalador .exe abaixo. Quem já tem o app recebe a atualização sozinho."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

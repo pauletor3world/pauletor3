@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["core", "app/src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["pAuletOr 3"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

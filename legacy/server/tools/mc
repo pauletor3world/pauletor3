@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# mc: CLI de administração do servidor Minecraft. Instalado em /usr/local/bin/mc.
+set -Eeuo pipefail
+
+BASE=/opt/minecraft
+TOOLS="$BASE/tools"
+SERVER="$BASE/server"
+SERVICE=minecraft
+
+# Quase tudo precisa de root (senha do RCON, systemctl): se reexecuta com sudo
+if [[ $EUID -ne 0 ]]; then exec sudo -- "$0" "$@"; fi
+
+die() { echo "erro: $*" >&2; exit 1; }
+rcon() { "$TOOLS/rcon.py" "$*"; }
+online() { rcon list >/dev/null 2>&1; }
+need_online() { online || die "servidor offline ou ainda iniciando (veja: mc logs)"; }
+
+# Avisa no chat e espera, se houver servidor rodando
+warn_players() {
+  if online; then
+    rcon "say $2" >/dev/null || true
+    sleep "$1"
+  fi
+}
+
+usage() {
+  cat <<'EOF'
+Uso: mc <comando>
+
+  status                     serviço, versões, jogadores, IPs, último backup
+  tps                        desempenho: tempo médio de tick (< 50 ms = sem lag)
+  logs                       log ao vivo (Ctrl+C para sair)
+  cmd "<comando>"            roda um comando no console (ex.: mc cmd "time set day")
+  op <nick> / deop <nick>    dá/tira operador
+  backup                     faz um backup agora
+  backups                    lista os backups
+  restore <arquivo>          restaura um backup (para e reinicia o servidor)
+  import-world <arquivo>     importa um mundo (.tar.gz/.tar.zst/.zip com level.dat)
+  uuid <nick>                UUID offline de um nick (nome do arquivo em playerdata/)
+  player-move <uuid> <nick>  passa inventário/posição de um UUID antigo para um nick
+  update [--allow-experimental] [--force]
+                             para o servidor, atualiza vanilla/Fabric/Lithium e sobe de novo
+  restart | start | stop
+EOF
+}
+
+latest_backup() {
+  find "$BASE/backups" -maxdepth 1 -name 'world-*.tar.zst' 2>/dev/null | sort | tail -n 1
+}
+
+server_port() {
+  grep -oP '^server-port=\K.*' "$SERVER/server.properties" 2>/dev/null || echo 25565
+}
+
+# DataVersion do servidor instalado (ex.: 4671 para a 1.21.11)
+server_data_version() {
+  python3 - "$SERVER/server.jar" <<'PY' 2>/dev/null || echo 0
+import json, sys, zipfile
+print(json.loads(zipfile.ZipFile(sys.argv[1]).read("version.json"))["world_version"])
+PY
+}
+
+offline_uuid() {
+  python3 - "$1" <<'PY'
+import hashlib, sys, uuid
+h = bytearray(hashlib.md5(("OfflinePlayer:" + sys.argv[1]).encode("utf-8")).digest())
+h[6] = (h[6] & 0x0F) | 0x30
+h[8] = (h[8] & 0x3F) | 0x80
+print(uuid.UUID(bytes=bytes(h)))
+PY
+}
+
+fix_owner() {
+  chown -R minecraft:minecraft "$SERVER"
+}
+
+cmd_status() {
+  local state since players ts_ip last
+  state=$(systemctl is-active "$SERVICE" 2>/dev/null || true)
+  since=$(systemctl show -p ActiveEnterTimestamp --value "$SERVICE" 2>/dev/null || true)
+  echo "Serviço:    ${state:-?}${since:+ (desde $since)}"
+  echo "Servidor:   $(cat "$SERVER/fabric-server-launch.jar.version" 2>/dev/null || echo '?')"
+  echo "Lithium:    $(cat "$SERVER/mods/lithium.jar.version" 2>/dev/null || echo '?')"
+  if players=$(rcon list 2>/dev/null); then
+    echo "Jogadores:  $players"
+  else
+    echo "Jogadores:  (servidor offline ou iniciando)"
+  fi
+  ts_ip=$(tailscale ip -4 2>/dev/null | sed -n 1p || true)
+  echo "Tailscale:  ${ts_ip:-(não conectado)}${ts_ip:+:$(server_port)}"
+  last=$(latest_backup)
+  if [[ -n $last ]]; then
+    echo "Backup:     $(basename "$last") ($(du -h "$last" | cut -f1))"
+  else
+    echo "Backup:     nenhum ainda"
+  fi
+  echo "Memória:    $(free -h | awk '/^Mem:/ {print $3 " usados de " $2}')"
+  echo "Disco:      $(df -h "$BASE" | awk 'NR==2 {print $3 " usados de " $2 " (" $5 ")"}')"
+  echo
+  systemctl list-timers minecraft-backup.timer --no-pager 2>/dev/null | sed -n '1,2p' || true
+}
+
+# /tick query (vanilla): "Average time per tick: 3.2ms (Target: 50.0ms)"
+cmd_tps() {
+  local out avg
+  need_online
+  out=$(rcon "tick query")
+  avg=$(grep -oE 'Average time per tick: [0-9]+([.,][0-9]+)?' <<<"$out" | grep -oE '[0-9]+([.,][0-9]+)?$' | tr , . || true)
+  sed -E 's/(Target tick rate|Average time|Percentiles)/\n\1/g' <<<"$out" | sed '/^$/d'
+  echo
+  [[ -n $avg ]] || die "não consegui ler o tempo médio de tick na resposta acima"
+  awk -v a="$avg" 'BEGIN {
+    tps = (a > 50) ? 1000 / a : 20
+    if (a < 50) printf "OK: %.1f ms por tick (limite 50 ms), %.1f TPS. Sem lag.\n", a, tps
+    else        printf "LAG: %.1f ms por tick (acima de 50 ms), cerca de %.1f TPS.\n", a, tps
+  }'
+}
+
+cmd_backup() {
+  echo "Fazendo backup..."
+  if ! systemctl start minecraft-backup.service; then
+    journalctl -u minecraft-backup.service -n 30 --no-pager
+    die "backup falhou"
+  fi
+  journalctl -u minecraft-backup.service -n 20 --no-pager -o cat | grep '^\[backup\]' | tail -n 5 || true
+}
+
+cmd_backups() {
+  local f
+  while IFS= read -r f; do
+    printf '%s  %s\n' "$(du -h "$f" | cut -f1)" "$(basename "$f")"
+  done < <(find "$BASE/backups" -maxdepth 1 -name 'world-*.tar.zst' | sort)
+}
+
+# Move as pastas de mundo atuais para $1 (nada é apagado)
+stash_worlds() {
+  mkdir -p "$1"
+  for d in world world_nether world_the_end; do
+    if [[ -e $SERVER/$d ]]; then mv "$SERVER/$d" "$1/"; fi
+  done
+}
+
+cmd_restore() {
+  local file=${1:-} keep
+  [[ -n $file ]] || die "uso: mc restore <arquivo> (veja: mc backups)"
+  [[ -f $file ]] || file="$BASE/backups/$file"
+  [[ -f $file ]] || die "backup não encontrado: $1"
+
+  warn_players 10 "Restaurando um backup em 10s. O servidor vai reiniciar."
+  systemctl stop "$SERVICE"
+  keep="$SERVER/pre-restore-$(date +%Y%m%d-%H%M%S)"
+  stash_worlds "$keep"
+  tar -C "$SERVER" -I zstd --wildcards -xf "$file" 'world*'
+  fix_owner
+  systemctl start "$SERVICE"
+  echo "Restaurado: $(basename "$file")"
+  echo "Mundo anterior guardado em: $keep (apague quando não precisar mais)"
+}
+
+cmd_import_world() {
+  local file=${1:-} tmp src info world_dv server_dv parent base keep sib dim
+  [[ -n $file && -f $file ]] || die "uso: mc import-world <arquivo .tar.gz | .tar.zst | .zip>"
+
+  tmp=$(mktemp -d "$BASE/import.XXXXXX")
+  IMPORT_TMP=$tmp   # global: o trap roda depois que a função já saiu
+  trap 'rm -rf "${IMPORT_TMP:-}"' EXIT
+  echo "Extraindo $(basename "$file")..."
+  case $file in
+    *.zip)             python3 -m zipfile -e "$file" "$tmp" ;;
+    *.tar.zst|*.tzst)  tar -C "$tmp" -I zstd -xf "$file" ;;
+    *)                 tar -C "$tmp" -xf "$file" ;;
+  esac
+
+  # A pasta do mundo é a que tem level.dat mais perto da raiz
+  src=$(find "$tmp" -maxdepth 4 -name level.dat -printf '%d\t%h\n' | sort -n | sed -n '1s/^[0-9]*\t//p')
+  [[ -n $src ]] || die "nenhum level.dat encontrado no arquivo"
+
+  info=$("$TOOLS/worldinfo.py" "$src") || die "level.dat ilegível"
+  world_dv=$(cut -f1 <<<"$info")
+  server_dv=$(server_data_version)
+  echo "Mundo: $(cut -f3 <<<"$info") (versão $(cut -f2 <<<"$info"), DataVersion $world_dv)"
+  if ((server_dv > 0 && world_dv > server_dv)); then
+    die "o mundo é de uma versão MAIS NOVA que o servidor (DataVersion $world_dv > $server_dv). Não dá para abrir."
+  fi
+  if ((world_dv < server_dv)); then
+    echo "Aviso: o mundo é de uma versão anterior e será convertido para a do servidor ao abrir."
+  fi
+
+  warn_players 10 "Trocando o mundo em 10s. O servidor vai reiniciar."
+  systemctl stop "$SERVICE"
+  if [[ -d $SERVER/world ]]; then
+    echo "Backup do mundo atual antes de importar..."
+    runuser -u minecraft -- "$TOOLS/backup.sh"
+  fi
+  keep="$SERVER/pre-import-$(date +%Y%m%d-%H%M%S)"
+  stash_worlds "$keep"
+
+  parent=$(dirname "$src")
+  base=$(basename "$src")
+  mv "$src" "$SERVER/world"
+  # Mundos vindos do Paper/Spigot guardam Nether e End em pastas irmãs
+  for pair in "_nether:DIM-1" "_the_end:DIM1"; do
+    dim=${pair#*:}
+    sib="$parent/$base${pair%%:*}/$dim"
+    if [[ -d $sib && ! -e $SERVER/world/$dim ]]; then mv "$sib" "$SERVER/world/$dim"; fi
+  done
+  rm -f "$SERVER/world/session.lock"
+  fix_owner
+  systemctl start "$SERVICE"
+
+  echo
+  echo "Mundo importado. O mundo anterior (se havia) está em: $keep"
+  if [[ -d $SERVER/world/playerdata ]]; then
+    echo
+    echo "Jogadores salvos neste mundo (playerdata):"
+    find "$SERVER/world/playerdata" -maxdepth 1 -name '*.dat' -printf '  %f  (%TY-%Tm-%Td, %s bytes)\n' | sed 's/\.dat / /'
+    echo
+    echo "No modo offline, cada nick vira um UUID próprio (veja: mc uuid <nick>)."
+    echo "Se alguém entrar sem o inventário antigo, rode: mc player-move <uuid-antigo> <nick>"
+  fi
+}
+
+cmd_uuid() {
+  [[ $# -eq 1 ]] || die "uso: mc uuid <nick>"
+  offline_uuid "$1"
+}
+
+# Copia inventário/posição (playerdata), estatísticas e conquistas de um UUID para um nick
+cmd_player_move() {
+  local old=${1:-} nick=${2:-} new w moved=0 kind ext
+  [[ -n $old && -n $nick ]] || die "uso: mc player-move <uuid-antigo> <nick>"
+  old=${old%.dat}
+  new=$(offline_uuid "$nick")
+  w="$SERVER/world"
+  [[ -f $w/playerdata/$old.dat ]] || die "não existe $w/playerdata/$old.dat (veja os arquivos com: ls $w/playerdata)"
+  [[ $old != "$new" ]] || die "esse UUID já é o do nick $nick"
+
+  warn_players 10 "Ajustando dados de jogador em 10s. O servidor vai reiniciar."
+  systemctl stop "$SERVICE"
+  for kind in playerdata:dat stats:json advancements:json; do
+    ext=${kind#*:}
+    kind=${kind%%:*}
+    if [[ -f $w/$kind/$old.$ext ]]; then
+      if [[ -f $w/$kind/$new.$ext ]]; then mv "$w/$kind/$new.$ext" "$w/$kind/$new.$ext.antes-do-move"; fi
+      cp -p "$w/$kind/$old.$ext" "$w/$kind/$new.$ext"
+      moved=$((moved + 1))
+    fi
+  done
+  fix_owner
+  systemctl start "$SERVICE"
+  echo "$moved arquivo(s) copiados de $old para $nick ($new). Os originais foram mantidos."
+}
+
+cmd_update() {
+  local rc=0
+  warn_players 10 "Atualizando o servidor em 10s. Volta em cerca de 1 minuto."
+  systemctl stop "$SERVICE"
+  "$TOOLS/update-server.sh" "$@" || rc=$?
+  fix_owner
+  systemctl start "$SERVICE"
+  ((rc == 0)) || die "atualização falhou; o servidor voltou com os arquivos anteriores"
+  echo "Atualizado. Servidor iniciando (veja: mc logs)."
+}
+
+cmd_restart() {
+  warn_players 10 "Servidor reiniciando em 10s."
+  systemctl restart "$SERVICE"
+  echo "Reiniciado. Veja: mc logs"
+}
+
+sub=${1:-help}
+shift || true
+case $sub in
+  status)       cmd_status ;;
+  tps)          cmd_tps ;;
+  logs)         exec journalctl -u "$SERVICE" -f -n 100 -o cat ;;
+  cmd)          [[ $# -gt 0 ]] || die 'uso: mc cmd "<comando>"'; need_online; rcon "$*" ;;
+  op|deop)      [[ $# -eq 1 ]] || die "uso: mc $sub <nick>"; need_online; rcon "$sub $1" ;;
+  backup)       cmd_backup ;;
+  backups)      cmd_backups ;;
+  restore)      cmd_restore "$@" ;;
+  import-world) cmd_import_world "$@" ;;
+  uuid)         cmd_uuid "$@" ;;
+  player-move)  cmd_player_move "$@" ;;
+  update)       cmd_update "$@" ;;
+  restart)      cmd_restart ;;
+  start)        systemctl start "$SERVICE"; echo "Iniciando. Veja: mc logs" ;;
+  stop)         warn_players 10 "Servidor desligando em 10s."; systemctl stop "$SERVICE"; echo "Parado." ;;
+  help|-h|--help) usage ;;
+  *)            usage; exit 1 ;;
+esac

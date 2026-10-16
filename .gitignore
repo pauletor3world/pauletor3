@@ -1,0 +1,17 @@
+/target
+node_modules/
+/app/dist
+/app/src-tauri/binaries/*
+!/app/src-tauri/binaries/.gitkeep
+/scripts/.cache
+*.log
+.env
+legacy/config.env
+
+# Mundo original (importado para a nuvem pelo app; não versionar)
+/pAuletOr 3/
+legacy/windows/local.json
+app/src-tauri/gen/
+.npmrc
+app/.npmrc
+*.tsbuildinfo

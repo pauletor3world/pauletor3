@@ -1,0 +1,61 @@
+[package]
+name = "pauletor3-core"
+description = "Núcleo do pAuletOr 3: sincronização, trava de host, servidor e sessão"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "pauletor3_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pauletor3-cli"
+path = "src/bin/pauletor3-cli.rs"
+
+[dependencies]
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"
+sha1 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.8"
+walkdir = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
+argon2 = "0.5"
+chacha20poly1305 = "0.10"
+zeroize = { version = "1", features = ["derive"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+sysinfo = "0.30"
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+hostname = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_Security_Cryptography",
+  "Win32_System_Memory",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Shutdown",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+flate2 = "1"

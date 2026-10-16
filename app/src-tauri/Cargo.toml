@@ -1,0 +1,44 @@
+[package]
+name = "pauletor3-app"
+description = "pAuletOr 3 — o nosso mundo de Minecraft, hospedado por turnos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "pauletor3_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pauletor3"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+pauletor3-core = { path = "../../core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+zeroize = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }

@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* Identidade do pAuletOr 3: noite de exploração, colinas esmeralda e um sol âmbar. */
+@theme {
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --color-night-950: #070b16;
+  --color-night-900: #0b1020;
+  --color-night-850: #0f1628;
+  --color-night-800: #131c31;
+  --color-night-700: #1a253d;
+  --color-night-600: #24314d;
+  --color-night-500: #33415f;
+
+  --color-ink: #e9edf7;
+  --color-ink-soft: #b8c2d9;
+  --color-ink-muted: #8390ad;
+  --color-ink-faint: #5c6886;
+
+  --color-moss-300: #9ae6b1;
+  --color-moss-400: #6fdc95;
+  --color-moss-500: #4cc77a;
+  --color-moss-600: #35a35f;
+  --color-moss-700: #2a7d4b;
+
+  --color-sun-300: #ffd98a;
+  --color-sun-400: #ffc45c;
+  --color-sun-500: #f5a83a;
+
+  --color-ember-400: #f47a6a;
+  --color-ember-500: #e5534b;
+
+  --color-sky-400: #6fb7ff;
+  --color-dusk-400: #b58cf0;
+
+  --radius-card: 18px;
+  --shadow-glow: 0 0 0 1px rgb(111 220 149 / 0.25), 0 12px 40px -10px rgb(76 199 122 / 0.45);
+  --shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.04) inset, 0 20px 40px -24px rgb(0 0 0 / 0.6);
+
+  --animate-rise: rise 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-fade: fade 0.3s ease-out both;
+  --animate-breathe: breathe 3.2s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.8s linear infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-night-900);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Céu de fundo: estrelas discretas e o brilho das colinas no rodapé. */
+.sky {
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgb(255 196 92 / 0.08), transparent 60%),
+    radial-gradient(900px 600px at 10% 120%, rgb(76 199 122 / 0.10), transparent 60%),
+    radial-gradient(1px 1px at 12% 18%, rgb(255 255 255 / 0.5), transparent),
+    radial-gradient(1px 1px at 36% 8%, rgb(255 255 255 / 0.35), transparent),
+    radial-gradient(1px 1px at 58% 22%, rgb(255 255 255 / 0.3), transparent),
+    radial-gradient(1px 1px at 78% 12%, rgb(255 255 255 / 0.4), transparent),
+    radial-gradient(1px 1px at 92% 30%, rgb(255 255 255 / 0.25), transparent),
+    var(--color-night-900);
+}
+
+.selectable {
+  user-select: text;
+}
+
+/* Rolagem fina e discreta. */
+.scroll {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-night-600) transparent;
+}
+
+.hills {
+  background:
+    radial-gradient(120% 90% at 20% 130%, rgb(76 199 122 / 0.35), transparent 60%),
+    radial-gradient(110% 80% at 80% 140%, rgb(53 163 95 / 0.35), transparent 60%),
+    radial-gradient(80% 60% at 90% -20%, rgb(255 196 92 / 0.18), transparent 60%),
+    linear-gradient(160deg, #15203a 0%, #102030 55%, #12302a 100%);
+}
+
+.progress-stripes {
+  background-image: linear-gradient(90deg, transparent 0%, rgb(255 255 255 / 0.18) 50%, transparent 100%);
+  background-size: 200% 100%;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--color-moss-400);
+  outline-offset: 2px;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

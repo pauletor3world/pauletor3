@@ -1,0 +1,29 @@
+[Unit]
+Description=Servidor Minecraft (Fabric + Lithium)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+WorkingDirectory=/opt/minecraft/server
+ExecStart=/opt/minecraft/start.sh
+# Parada limpa via RCON "stop"; se falhar, o SIGTERM abaixo também salva o mundo
+ExecStop=/opt/minecraft/tools/stop.sh $MAINPID
+Restart=on-failure
+RestartSec=10
+SuccessExitStatus=0 143
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+# Hardening leve (ProtectSystem=full deixa /opt gravável)
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

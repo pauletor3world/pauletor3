@@ -1,0 +1,13 @@
+# Configuração local e segredos
+config.env
+windows/local.json
+*.secret
+*.key
+*.pem
+*.ppk
+id_rsa*
+id_ed25519*
+
+# Backups baixados da VM
+backups-local/
+*.tar.zst

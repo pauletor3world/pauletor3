@@ -1,0 +1,34 @@
+{
+  "format": 1,
+  "minecraft": "1.21.11",
+  "world_data_version": 4671,
+  "fabric_loader": "0.19.5",
+  "fabric_installer": "1.1.2",
+  "fabric_launcher": {
+    "url": "https://meta.fabricmc.net/v2/versions/loader/1.21.11/0.19.5/1.1.2/server/jar",
+    "filename": "fabric-server-launch.jar",
+    "sha256": "2b63d293be54c8f5484a242859cab841dcee38511e11b2f82e92211f19872d08",
+    "size": 181841
+  },
+  "vanilla_server": {
+    "url": "https://piston-data.mojang.com/v1/objects/64bb6d763bed0a9f1d632ec347938594144943ed/server.jar",
+    "filename": "server.jar",
+    "sha1": "64bb6d763bed0a9f1d632ec347938594144943ed",
+    "size": 56327581
+  },
+  "lithium_version": "0.21.4",
+  "lithium": {
+    "url": "https://cdn.modrinth.com/data/gvQqBUqZ/versions/Ow7wA0kG/lithium-fabric-0.21.4%2Bmc1.21.11.jar",
+    "filename": "lithium-fabric-0.21.4+mc1.21.11.jar",
+    "sha512": "f14a5c3d2fad786347ca25083f902139694f618b7c103947f2fd067a7c5ee88a63e1ef8926f7d693ea79ed7d00f57317bae77ef9c2d630bf5ed01ac97a752b94",
+    "size": 900462
+  },
+  "java_major": 21,
+  "java_release": "jdk-21.0.12.1+1",
+  "java_windows_x64": {
+    "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1/OpenJDK21U-jre_x64_windows_hotspot_21.0.12.1_1.zip",
+    "filename": "OpenJDK21U-jre_x64_windows_hotspot_21.0.12.1_1.zip",
+    "sha256": "d35f31e712f0fcf6ac5a093edc90204fbff22f720ba3950bd09d331d5e621636",
+    "size": 48999141
+  }
+}

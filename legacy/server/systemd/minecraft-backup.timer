@@ -1,0 +1,10 @@
+[Unit]
+Description=Backup diário do Minecraft às 05:00 (Brasília)
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 America/Sao_Paulo
+Persistent=true
+Unit=minecraft-backup.service
+
+[Install]
+WantedBy=timers.target

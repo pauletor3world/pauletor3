@@ -1,0 +1,79 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "pAuletOr 3",
+  "version": "0.1.0",
+  "identifier": "com.pauletor3.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "pAuletOr 3",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 980,
+        "minHeight": 640,
+        "decorations": false,
+        "visible": false,
+        "center": true,
+        "backgroundColor": "#0b1020"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "publisher": "pAuletOr 3",
+    "shortDescription": "O nosso mundo de Minecraft, hospedado por turnos",
+    "longDescription": "Hospede o mundo pAuletOr 3 por turnos, com sincronização segura na nuvem, sem servidor ligado o tempo todo.",
+    "copyright": "pAuletOr 3",
+    "category": "Game",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/rclone"
+    ],
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "PortugueseBR"
+        ],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "./installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGRTNENzUyRUU3QjA4RTAKUldUZ0NIdnVVdGZqbjdWeU5IVEY3eHY1VlNzbWE4MFRaKzU0a0tHYzFrbHcvaHFUZVFiZEJweU4K",
+      "endpoints": [
+        "https://github.com/pauletor3world/pauletor3/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

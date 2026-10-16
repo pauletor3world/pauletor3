@@ -1,0 +1,437 @@
+//! Comandos chamados pela interface (invoke).
+
+use std::sync::Arc;
+
+use pauletor3_core::config::{AddressMode, Config};
+use pauletor3_core::error::HumanError;
+use pauletor3_core::health::{self, Check};
+use pauletor3_core::journal::{Category, JournalSettings, JournalStatus};
+use pauletor3_core::launcher::{self, LauncherCandidate};
+use pauletor3_core::manifest::ManifestSummary;
+use pauletor3_core::players::{Migration, WorldPlayer};
+use pauletor3_core::retention::GcReport;
+use pauletor3_core::session::{EndReason, Engine, Status};
+use pauletor3_core::stats::Stats;
+use pauletor3_core::versions::WorldSettings;
+use pauletor3_core::{firewall, serversdat, NmError};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager, State};
+
+use crate::AppState;
+
+/// Erro que a interface recebe: sempre com título humano.
+#[derive(Debug, Serialize)]
+pub struct CmdError(pub Box<HumanError>);
+
+impl From<NmError> for CmdError {
+    fn from(e: NmError) -> Self {
+        tracing::warn!(error = %e, "comando falhou");
+        CmdError(Box::new(e.human()))
+    }
+}
+
+impl From<anyhow::Error> for CmdError {
+    fn from(e: anyhow::Error) -> Self {
+        CmdError::from(NmError::Other(e))
+    }
+}
+
+impl From<std::io::Error> for CmdError {
+    fn from(e: std::io::Error) -> Self {
+        CmdError::from(NmError::from(e))
+    }
+}
+
+impl CmdError {
+    pub fn msg(title: &str, detail: impl Into<String>) -> Self {
+        CmdError(Box::new(HumanError { code: "other", title: title.into(), detail: detail.into(), lock: None }))
+    }
+}
+
+pub type CmdResult<T> = Result<T, CmdError>;
+
+pub fn engine(state: &State<'_, AppState>) -> CmdResult<Arc<Engine>> {
+    state.engine().ok_or_else(|| CmdError::msg("Falta terminar a configuração", "Abra o assistente."))
+}
+
+#[derive(Serialize)]
+pub struct AppInfo {
+    pub version: String,
+    pub configured: bool,
+    pub has_engine: bool,
+    pub data_dir: Option<String>,
+    pub is_owner: bool,
+    pub start_minimized: bool,
+}
+
+#[tauri::command]
+pub async fn app_ready(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
+    if !state.start_minimized {
+        crate::show_main(&app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
+    let e = state.engine();
+    let (configured, owner, dir) = match &e {
+        Some(e) => {
+            let c = e.config.read().await;
+            (c.setup_complete, c.is_owner, Some(e.paths.root.display().to_string()))
+        }
+        None => (false, false, None),
+    };
+    Ok(AppInfo {
+        version: pauletor3_core::APP_VERSION.into(),
+        configured,
+        has_engine: e.is_some(),
+        data_dir: dir,
+        is_owner: owner,
+        start_minimized: state.start_minimized,
+    })
+}
+
+#[tauri::command]
+pub async fn get_status(state: State<'_, AppState>) -> CmdResult<Status> {
+    Ok(engine(&state)?.status())
+}
+
+#[tauri::command]
+pub async fn refresh(state: State<'_, AppState>) -> CmdResult<Status> {
+    let e = engine(&state)?;
+    e.refresh().await?;
+    Ok(e.status())
+}
+
+#[tauri::command]
+pub async fn play(state: State<'_, AppState>, takeover: Option<Vec<String>>, open_game: bool) -> CmdResult<()> {
+    let e = engine(&state)?;
+    e.play(takeover.unwrap_or_default(), open_game).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn take_turn(state: State<'_, AppState>, open_game: bool) -> CmdResult<()> {
+    Ok(engine(&state)?.take_turn(open_game).await?)
+}
+
+#[tauri::command]
+pub async fn pass_turn(state: State<'_, AppState>) -> CmdResult<()> {
+    Ok(engine(&state)?.pass_turn().await?)
+}
+
+#[tauri::command]
+pub async fn stop_session(state: State<'_, AppState>) -> CmdResult<()> {
+    Ok(engine(&state)?.stop(EndReason::UserStop).await?)
+}
+
+#[tauri::command]
+pub async fn save_now(state: State<'_, AppState>) -> CmdResult<()> {
+    Ok(engine(&state)?.force_checkpoint().await?)
+}
+
+#[tauri::command]
+pub async fn recover(state: State<'_, AppState>) -> CmdResult<()> {
+    Ok(engine(&state)?.recover().await?)
+}
+
+#[tauri::command]
+pub async fn timeline(state: State<'_, AppState>) -> CmdResult<Vec<ManifestSummary>> {
+    Ok(engine(&state)?.timeline().await?)
+}
+
+#[tauri::command]
+pub async fn restore(state: State<'_, AppState>, manifest_id: String) -> CmdResult<()> {
+    Ok(engine(&state)?.restore(manifest_id).await?)
+}
+
+#[tauri::command]
+pub async fn stats(state: State<'_, AppState>) -> CmdResult<Stats> {
+    Ok(engine(&state)?.stats().await?)
+}
+
+#[tauri::command]
+pub async fn health(state: State<'_, AppState>) -> CmdResult<Vec<Check>> {
+    let e = engine(&state)?;
+    let _ = e.refresh().await;
+    Ok(health::run(&e).await)
+}
+
+/// Ação de correção de um item do checklist.
+#[tauri::command]
+pub async fn run_fix(app: AppHandle, state: State<'_, AppState>, fix: String) -> CmdResult<String> {
+    let e = engine(&state)?;
+    match fix.as_str() {
+        "fix_firewall" => {
+            firewall::install_rules().await?;
+            Ok("Firewall configurado.".into())
+        }
+        "fix_serversdat" => {
+            let cfg = e.config.read().await.clone();
+            let mc = cfg.minecraft_dir.clone().ok_or_else(|| CmdError::msg("Pasta .minecraft não definida", "Defina nas Configurações."))?;
+            if launcher::client_running(None) {
+                return Err(CmdError::msg("Feche o Minecraft primeiro", "A lista de servidores só pode ser alterada com o jogo fechado."));
+            }
+            let addr = match cfg.public_address(None) {
+                Some(a) => a,
+                None => match e.status().lock {
+                    Some(pauletor3_core::lock::LockStatus::Held { lock }) => lock.tailscale_ip.unwrap_or_default(),
+                    _ => return Err(CmdError::msg("Sem endereço ainda", "Configure o DuckDNS ou espere alguém abrir o mundo.")),
+                },
+            };
+            serversdat::ensure_entry(&mc, &addr, &e.paths.backups())?;
+            Ok(format!("Entrada \"pAuletOr 3\" aponta para {addr}."))
+        }
+        "use_direct_ip" => {
+            e.update_config(|c| c.address_mode = AddressMode::DirectIp).await?;
+            Ok("Modo IP direto ligado.".into())
+        }
+        "recover" => {
+            e.recover().await?;
+            Ok("Sessão recuperada.".into())
+        }
+        "prepare" => {
+            crate::setup::prepare_runtime_inner(&e).await?;
+            Ok("Java e servidor prontos.".into())
+        }
+        "connect_tailscale" => {
+            let key = e.secrets().await.tailscale_auth_key.clone();
+            let name = e.config.read().await.player_name.clone();
+            match key {
+                Some(k) => {
+                    pauletor3_core::tailscale::up_with_key(&k, &name).await?;
+                    Ok("Tailscale conectado.".into())
+                }
+                None => Err(CmdError::msg("Sem chave do Tailscale", "Abra o app do Tailscale e faça login, ou peça um novo convite.")),
+            }
+        }
+        "install_tailscale" => {
+            crate::setup::install_tailscale_inner(&e).await?;
+            Ok("Tailscale instalado.".into())
+        }
+        "open_tailscale_keys" => {
+            use tauri_plugin_opener::OpenerExt;
+            let _ = app.opener().open_url("https://login.tailscale.com/admin/settings/keys", None::<&str>);
+            Ok("Abrindo o painel do Tailscale.".into())
+        }
+        other => Err(CmdError::msg("Ação desconhecida", other)),
+    }
+}
+
+#[tauri::command]
+pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
+    let e = engine(&state)?;
+    let _ = e.refresh().await;
+    let checks = health::run(&e).await;
+    Ok(pauletor3_core::diagnostics::report(&e, &checks).await)
+}
+
+/// Configurações sem segredos (só diz se cada segredo existe).
+#[derive(Serialize)]
+pub struct SettingsView {
+    pub config: Config,
+    pub has_webhook: bool,
+    pub has_duckdns_token: bool,
+    pub has_tailscale_key: bool,
+    pub has_remote: bool,
+    pub data_dir: String,
+    pub auto_heap_mb: u64,
+    pub total_ram_mb: u64,
+    pub journal_categories: Vec<(Category, String, bool)>,
+}
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView> {
+    let e = engine(&state)?;
+    let c = e.config.read().await.clone();
+    let s = e.secrets().await;
+    let total = pauletor3_core::heap::total_ram_mb();
+    Ok(SettingsView {
+        journal_categories: Category::ALL.iter().map(|k| (*k, k.label().to_string(), c.journal.is_on(*k))).collect(),
+        config: c,
+        has_webhook: s.discord_webhook.is_some(),
+        has_duckdns_token: s.duckdns_token.is_some(),
+        has_tailscale_key: s.tailscale_auth_key.is_some(),
+        has_remote: s.rclone_config_pass.is_some(),
+        data_dir: e.paths.root.display().to_string(),
+        auto_heap_mb: pauletor3_core::heap::auto_heap_mb(total),
+        total_ram_mb: total,
+    })
+}
+
+#[derive(Deserialize)]
+pub struct SettingsPatch {
+    pub player_name: Option<String>,
+    pub minecraft_dir: Option<String>,
+    pub launcher_path: Option<String>,
+    /// 0 = automático
+    pub ram_mb: Option<u64>,
+    pub checkpoint_minutes: Option<u64>,
+    pub grace_minutes: Option<u64>,
+    pub notify_toasts: Option<bool>,
+    pub notify_join_leave: Option<bool>,
+    pub duckdns_domain: Option<String>,
+    pub address_mode: Option<AddressMode>,
+    pub journal: Option<Vec<(Category, bool)>>,
+}
+
+#[tauri::command]
+pub async fn save_settings(state: State<'_, AppState>, patch: SettingsPatch) -> CmdResult<()> {
+    let e = engine(&state)?;
+    if let Some(n) = &patch.player_name {
+        if !Config::is_valid_player_name(n) {
+            return Err(CmdError::msg("Nick inválido", "Use de 3 a 16 letras, números ou _ (igual ao do Minecraft)."));
+        }
+        if e.is_hosting().await {
+            return Err(CmdError::msg("Feche a sessão antes", "O nick não pode mudar com o mundo aberto."));
+        }
+    }
+    e.update_config(|c| {
+        if let Some(v) = patch.player_name {
+            c.player_name = v;
+        }
+        if let Some(v) = patch.minecraft_dir {
+            c.minecraft_dir = (!v.is_empty()).then(|| v.into());
+        }
+        if let Some(v) = patch.launcher_path {
+            c.launcher_path = (!v.is_empty()).then(|| v.into());
+        }
+        if let Some(v) = patch.ram_mb {
+            c.ram_mb = (v > 0).then_some(v);
+        }
+        if let Some(v) = patch.checkpoint_minutes {
+            c.checkpoint_minutes = v.clamp(5, 120);
+        }
+        if let Some(v) = patch.grace_minutes {
+            c.grace_minutes = v.clamp(1, 30);
+        }
+        if let Some(v) = patch.notify_toasts {
+            c.notify_toasts = v;
+        }
+        if let Some(v) = patch.notify_join_leave {
+            c.notify_join_leave = v;
+        }
+        if let Some(v) = patch.duckdns_domain {
+            c.duckdns_domain = (!v.trim().is_empty()).then(|| pauletor3_core::duckdns::subdomain(&v));
+        }
+        if let Some(v) = patch.address_mode {
+            c.address_mode = v;
+        }
+        if let Some(v) = patch.journal {
+            let mut j = JournalSettings::default();
+            for (k, on) in v {
+                j.enabled.insert(k, on);
+            }
+            c.journal = j;
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+/// Grava um segredo (webhook, token do DuckDNS, chave do Tailscale). Vazio = apagar.
+#[tauri::command]
+pub async fn set_secret(state: State<'_, AppState>, kind: String, value: String) -> CmdResult<()> {
+    let e = engine(&state)?;
+    let v = value.trim().to_string();
+    let v = (!v.is_empty()).then_some(v);
+    if kind == "discord_webhook" {
+        if let Some(w) = &v {
+            if !pauletor3_core::journal::is_valid_webhook(w) {
+                return Err(CmdError::msg("Webhook inválido", "Copie a URL em Discord → Editar canal → Integrações → Webhooks."));
+            }
+        }
+    }
+    e.update_secrets(|s| match kind.as_str() {
+        "discord_webhook" => s.discord_webhook = v,
+        "duckdns_token" => s.duckdns_token = v,
+        "tailscale_auth_key" => s.tailscale_auth_key = v,
+        _ => {}
+    })
+    .await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_world_settings(state: State<'_, AppState>) -> CmdResult<WorldSettings> {
+    Ok(engine(&state)?.world_settings().await?)
+}
+
+#[tauri::command]
+pub async fn save_world_settings(state: State<'_, AppState>, settings: WorldSettings) -> CmdResult<()> {
+    Ok(engine(&state)?.save_world_settings(settings).await?)
+}
+
+#[tauri::command]
+pub async fn console_cmd(state: State<'_, AppState>, command: String) -> CmdResult<String> {
+    Ok(engine(&state)?.console(&command).await?)
+}
+
+#[tauri::command]
+pub async fn console_history(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    Ok(state.console.lock().unwrap().iter().cloned().collect())
+}
+
+#[tauri::command]
+pub async fn detect_launchers() -> CmdResult<Vec<LauncherCandidate>> {
+    Ok(launcher::detect())
+}
+
+#[tauri::command]
+pub async fn open_launcher(state: State<'_, AppState>) -> CmdResult<()> {
+    let e = engine(&state)?;
+    let p = e
+        .config
+        .read()
+        .await
+        .launcher_path
+        .clone()
+        .ok_or_else(|| CmdError::msg("Launcher não configurado", "Escolha o launcher nas Configurações."))?;
+    launcher::open(&p).map_err(|err| CmdError::msg("Não consegui abrir o launcher", err.to_string()))
+}
+
+#[tauri::command]
+pub async fn world_players(state: State<'_, AppState>) -> CmdResult<Vec<WorldPlayer>> {
+    Ok(engine(&state)?.world_players().await?)
+}
+
+#[tauri::command]
+pub async fn migrate_player(state: State<'_, AppState>, uuid: String, nick: String) -> CmdResult<Migration> {
+    Ok(engine(&state)?.migrate_player(uuid, nick).await?)
+}
+
+#[tauri::command]
+pub async fn gc(state: State<'_, AppState>, dry_run: bool) -> CmdResult<GcReport> {
+    Ok(engine(&state)?.gc(dry_run).await?)
+}
+
+#[tauri::command]
+pub async fn journal_status(state: State<'_, AppState>) -> CmdResult<JournalStatus> {
+    Ok(engine(&state)?.journal.status())
+}
+
+#[tauri::command]
+pub async fn test_webhook(state: State<'_, AppState>, url: Option<String>) -> CmdResult<()> {
+    let e = engine(&state)?;
+    let url = match url.filter(|u| !u.trim().is_empty()) {
+        Some(u) => u.trim().to_string(),
+        None => e.secrets().await.discord_webhook.clone().ok_or_else(|| CmdError::msg("Sem webhook", "Cole a URL do webhook primeiro."))?,
+    };
+    let world = e.status().world_name;
+    pauletor3_core::journal::send_test(&url, &world).await.map_err(|m| CmdError::msg("O teste não chegou ao Discord", m))
+}
+
+#[tauri::command]
+pub async fn quit_app(app: AppHandle) -> CmdResult<()> {
+    crate::quit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn hide_window(app: AppHandle) -> CmdResult<()> {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    Ok(())
+}

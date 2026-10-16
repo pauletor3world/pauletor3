@@ -1,0 +1,15 @@
+[Unit]
+Description=Backup dos mundos do Minecraft
+
+[Service]
+Type=oneshot
+User=minecraft
+Group=minecraft
+ExecStart=/opt/minecraft/tools/backup.sh
+Nice=10
+IOSchedulingClass=idle
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
