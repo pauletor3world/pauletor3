@@ -1407,6 +1407,8 @@ impl Engine {
         if self.is_hosting().await {
             return Err(NmError::Other(anyhow::anyhow!("feche a sessão antes")));
         }
+        // Uma operação por vez sobre a pasta do mundo (abrir a tela duas vezes não pode montar duas cópias).
+        let _op = self.op.lock().await;
         let se = self.sync_engine().await?;
         if !LocalState::load(&self.paths).dirty {
             se.pull(self.progress()).await?;
