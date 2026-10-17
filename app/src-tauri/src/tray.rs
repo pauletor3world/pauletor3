@@ -2,8 +2,8 @@
 
 use std::sync::Mutex;
 
-use pauletor3_core::coord::LeaseStatus;
-use pauletor3_core::session::{Phase, Status};
+use machencraft_core::coord::LeaseStatus;
+use machencraft_core::session::{Phase, Status};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -30,13 +30,13 @@ fn icon(kind: &str) -> Image<'static> {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let play = MenuItem::with_id(app, "play", "Jogar", true, None::<&str>)?;
     let pass = MenuItem::with_id(app, "pass", "Passar o host", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Abrir pAuletOr 3", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Abrir o Machen Craft", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&play, &pass, &open, &sep, &quit])?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon("idle"))
-        .tooltip("pAuletOr 3")
+        .tooltip("Machen Craft")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -125,7 +125,7 @@ pub fn update(app: &AppHandle, st: &Status) {
             *last = kind;
         }
     }
-    let _ = tray.set_tooltip(Some(format!("pAuletOr 3 — {}", describe(st))));
+    let _ = tray.set_tooltip(Some(format!("Machen Craft — {}", describe(st))));
     let idle = matches!(st.phase, Phase::Idle);
     let (play_text, play_on) = match &st.lease {
         _ if st.me_hosting => ("Abrir o Minecraft", true),

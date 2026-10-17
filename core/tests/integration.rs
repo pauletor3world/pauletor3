@@ -7,18 +7,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
-use pauletor3_core::coord::mem::{MemCoordinator, MemHub};
-use pauletor3_core::coord::{rules, Coordinator, LeasePurpose, Presence};
-use pauletor3_core::events::quiet;
-use pauletor3_core::lease::{LeaseConfig, LeaseGuard, LeaseManager};
-use pauletor3_core::manifest::{FileEntry, ManifestKind, ServerVersions};
-use pauletor3_core::mirror;
-use pauletor3_core::p2p::{self, NetMode, Node, PeerObjects};
-use pauletor3_core::paths::Paths;
-use pauletor3_core::remote::{layout, EncryptedRemote, FsRemote, Remote};
-use pauletor3_core::retention::{self, Policy};
-use pauletor3_core::sync::{LocalState, PullOutcome, PushMeta, SyncEngine};
-use pauletor3_core::NmError;
+use machencraft_core::coord::mem::{MemCoordinator, MemHub};
+use machencraft_core::coord::{rules, Coordinator, LeasePurpose, Presence};
+use machencraft_core::events::quiet;
+use machencraft_core::lease::{LeaseConfig, LeaseGuard, LeaseManager};
+use machencraft_core::manifest::{FileEntry, ManifestKind, ServerVersions};
+use machencraft_core::mirror;
+use machencraft_core::p2p::{self, NetMode, Node, PeerObjects};
+use machencraft_core::paths::Paths;
+use machencraft_core::remote::{layout, EncryptedRemote, FsRemote, Remote};
+use machencraft_core::retention::{self, Policy};
+use machencraft_core::sync::{LocalState, PullOutcome, PushMeta, SyncEngine};
+use machencraft_core::NmError;
 
 const KEY: [u8; 32] = [42u8; 32];
 
@@ -63,7 +63,7 @@ fn cloud(dir: &Path, tmp: &Path) -> (FsRemote, Arc<dyn Remote>) {
 
 /// Cria um mundo falso com level.dat válido (NBT gzip), regiões e playerdata.
 fn make_world(server: &Path, seed: u8) {
-    use pauletor3_core::nbt::{self, Tag};
+    use machencraft_core::nbt::{self, Tag};
     let w = server.join("world");
     std::fs::create_dir_all(w.join("region")).unwrap();
     std::fs::create_dir_all(w.join("playerdata")).unwrap();
@@ -173,7 +173,7 @@ async fn planned_handoff_goes_to_newest_replica() {
     ga.release_handoff().await.unwrap();
     let v = b.coord.view().await.unwrap();
     match &v.lease {
-        pauletor3_core::coord::LeaseStatus::Free { previous: Some(p) } => {
+        machencraft_core::coord::LeaseStatus::Free { previous: Some(p) } => {
             assert!(p.handing_over);
             assert_eq!(p.holder, "a");
         }
@@ -210,7 +210,7 @@ async fn interrupted_upload_never_moves_head() {
     sb.pull(quiet()).await.unwrap();
     let m = sb.fetch_manifest(&m1).await.unwrap();
     for (rel, e) in &m.files {
-        assert_eq!(pauletor3_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap(), e.hash);
+        assert_eq!(machencraft_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap(), e.hash);
     }
 
     let m2 = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap();
@@ -405,7 +405,7 @@ async fn p2p_replica_works_without_cloud() {
     // a nuvem "cai" para downloads: tudo tem que vir de A
     fs.fail_after(0);
     let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
-    let peers: Arc<dyn pauletor3_core::sync::ObjectSource> = Arc::new(PeerObjects { node: nb.clone(), peers: vec![na.endpoint.addr()] });
+    let peers: Arc<dyn machencraft_core::sync::ObjectSource> = Arc::new(PeerObjects { node: nb.clone(), peers: vec![na.endpoint.addr()] });
     let sb = b.engine(rb).with_peers(Some(peers));
     let head = sb.prefetch(quiet()).await.unwrap().unwrap();
     assert_eq!(head.manifest, m1);

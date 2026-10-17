@@ -1,12 +1,12 @@
 [package]
-name = "pauletor3-core"
-description = "Núcleo do pAuletOr 3: sincronização, trava de host, servidor e sessão"
+name = "machencraft-core"
+description = "Núcleo do Machen Craft: sincronização, trava de host, servidor e sessão"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "pauletor3_core"
+name = "machencraft_core"
 path = "src/lib.rs"
 
 [features]
@@ -15,8 +15,8 @@ default = []
 personal = []
 
 [[bin]]
-name = "pauletor3-cli"
-path = "src/bin/pauletor3-cli.rs"
+name = "machencraft-cli"
+path = "src/bin/machencraft-cli.rs"
 
 [dependencies]
 anyhow = "1"

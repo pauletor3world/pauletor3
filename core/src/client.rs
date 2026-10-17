@@ -314,7 +314,7 @@ impl Job {
 
 fn http() -> NmResult<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(concat!("pAuletOr3/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3)"))
+        .user_agent(concat!("MachenCraft/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3world)"))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))
         .build()
@@ -659,7 +659,7 @@ impl Installed {
         vars.insert("auth_access_token", "0".into());
         vars.insert("version_type", if self.meta.kind.is_empty() { "release".into() } else { self.meta.kind.clone() });
         vars.insert("natives_directory", self.layout.natives(id).display().to_string());
-        vars.insert("launcher_name", "pAuletOr3".into());
+        vars.insert("launcher_name", "MachenCraft".into());
         vars.insert("launcher_version", crate::APP_VERSION.into());
         vars.insert("classpath", self.classpath());
         if let Some(q) = &o.quick_play {

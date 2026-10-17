@@ -13,13 +13,12 @@ import {
   Globe,
   MessageCircle,
   Mountain,
-  PartyPopper,
   ShieldCheck,
-  Sparkles,
   Ticket,
   UserRound,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { Brand, TitleBar } from "../components/Chrome";
 import { Button, ErrorBanner, Field, InfoNote, Progress, cx, inputCls } from "../components/ui";
 import { api } from "../lib/api";
 import { bytes, syncLabel } from "../lib/format";
@@ -40,10 +39,10 @@ const META: Record<StepId, { title: string; icon: ReactNode }> = {
   world: { title: "O mundo", icon: <Globe className="size-4" /> },
   join: { title: "Entrar", icon: <Ticket className="size-4" /> },
   invite_out: { title: "Convidar", icon: <Ticket className="size-4" /> },
-  done: { title: "Pronto", icon: <PartyPopper className="size-4" /> },
+  done: { title: "Pronto", icon: <Check className="size-4" /> },
 };
 
-const looksLikeInvite = (s: string) => /^(P3J1\.|pauletor3:\/\/entrar\/|https?:\/\/\S+\/c\/[a-z0-9]+\.[a-z0-9]+#)/.test(s.trim());
+const looksLikeInvite = (s: string) => /^(P3J1\.|(machencraft|pauletor3):\/\/entrar\/|https?:\/\/\S+\/c\/[a-z0-9]+\.[a-z0-9]+#)/.test(s.trim());
 
 export default function Wizard({ onDone }: { onDone: () => void }) {
   const [role, setRole] = useState<Role>("friend");
@@ -81,51 +80,60 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
   }, []);
 
   return (
-    <div className="flex-1 flex min-h-0">
-      <aside className="w-[240px] shrink-0 p-6 border-r border-white/[0.05] bg-night-950/30">
-        <img src="/logo.png" alt="" className="size-12 rounded-2xl mb-4 shadow-lg" />
-        <div className="font-display text-xl font-bold">pAuletOr 3</div>
-        <div className="text-ink-muted text-[12.5px] mb-7">{role === "owner" ? "Criar o mundo" : "Entrar no mundo"}</div>
-        <ol className="space-y-1">
-          {steps.map((s, k) => (
-            <li
-              key={s}
-              className={cx("flex items-center gap-2.5 h-9 px-3 rounded-xl text-[13px]", k === i ? "bg-white/[0.07] text-ink font-semibold" : k < i ? "text-moss-300" : "text-ink-faint")}
-            >
-              <span className="size-5 flex items-center justify-center">{k < i ? <Check className="size-4" /> : META[s].icon}</span>
-              {META[s].title}
-            </li>
-          ))}
-        </ol>
-        <div className="mt-10 text-[11px] text-ink-faint leading-relaxed">Não afiliado à Mojang nem à Microsoft.</div>
-      </aside>
-      <main className="flex-1 scroll">
-        <div className="max-w-[640px] mx-auto px-10 py-10" key={step}>
-          {step === "welcome" && <Welcome role={role} setRole={setRole} next={next} hasInvite={!!invite} />}
-          {step === "pc" && <PcStep next={next} back={back} />}
-          {step === "world" && <WorldStep next={next} back={back} />}
-          {step === "join" && <JoinStep invite={invite} setInvite={setInvite} next={next} back={back} />}
-          {step === "invite_out" && <InviteOut next={next} />}
-          {step === "done" && <Done onDone={onDone} owner={role === "owner"} />}
+    <div className="h-full flex">
+      <aside className="relative w-[300px] shrink-0 overflow-hidden flex flex-col">
+        <img src="/cena.png" alt="" aria-hidden className="pixelated absolute inset-0 h-full w-full object-cover object-[50%_70%]" draggable={false} />
+        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgb(6_12_27/0.88)_0%,rgb(6_12_27/0.7)_45%,rgb(6_12_27/0.15)_78%,rgb(6_12_27/0.55)_100%)]" />
+        <div className="relative flex flex-col h-full p-6">
+          <Brand className="mt-2 mb-8" />
+          <div className="text-[13px] text-ink-muted mb-3">{role === "owner" ? "Criar o mundo" : "Entrar no mundo"}</div>
+          <ol className="space-y-1">
+            {steps.map((s, k) => (
+              <li
+                key={s}
+                aria-current={k === i ? "step" : undefined}
+                className={cx(
+                  "flex items-center gap-3 h-9 px-3 rounded-[10px] text-[14px] font-semibold",
+                  k === i ? "bg-white/[0.1] text-ink" : k < i ? "text-moss-300" : "text-ink-faint",
+                )}
+              >
+                <span className={cx("size-5 flex items-center justify-center", k === i && "text-sun-400")}>{k < i ? <Check className="size-4" /> : META[s].icon}</span>
+                {META[s].title}
+              </li>
+            ))}
+          </ol>
+          <div className="mt-auto text-[11.5px] text-ink-soft/80 [text-shadow:0_1px_6px_rgb(6_12_27)]">Não afiliado à Mojang nem à Microsoft.</div>
         </div>
-      </main>
+      </aside>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <TitleBar />
+        <main className="flex-1 min-h-0 scroll">
+          <div className="max-w-[620px] mx-auto px-10 pt-8 pb-12 animate-pop" key={step}>
+            {step === "welcome" && <Welcome role={role} setRole={setRole} next={next} hasInvite={!!invite} />}
+            {step === "pc" && <PcStep next={next} back={back} />}
+            {step === "world" && <WorldStep next={next} back={back} />}
+            {step === "join" && <JoinStep invite={invite} setInvite={setInvite} next={next} back={back} />}
+            {step === "invite_out" && <InviteOut next={next} />}
+            {step === "done" && <Done onDone={onDone} owner={role === "owner"} />}
+          </div>
+        </main>
+      </div>
     </div>
   );
 }
 
-function StepHeader({ kicker, title, children }: { kicker: string; title: string; children?: ReactNode }) {
+function StepHeader({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="mb-7 animate-rise">
-      <div className="text-[12px] uppercase tracking-[0.14em] text-moss-400 font-semibold mb-2">{kicker}</div>
-      <h1 className="font-display text-[30px] leading-tight font-bold tracking-tight">{title}</h1>
-      {children && <div className="text-ink-soft mt-2 text-[14px] leading-relaxed">{children}</div>}
+    <div className="mb-8">
+      <h1 className="font-display text-[50px] leading-[0.92]">{title}</h1>
+      {children && <div className="text-ink-soft mt-3 text-[15px] leading-relaxed max-w-[60ch]">{children}</div>}
     </div>
   );
 }
 
 function Nav({ back, next, nextLabel = "Continuar", disabled, busy }: { back?: () => void; next: () => void; nextLabel?: string; disabled?: boolean; busy?: boolean }) {
   return (
-    <div className="flex justify-between mt-8 pt-5 border-t border-white/[0.05]">
+    <div className="flex justify-between mt-10 pt-6 border-t border-white/[0.06]">
       {back ? (
         <Button variant="ghost" icon={<ArrowLeft className="size-4" />} onClick={back}>
           Voltar
@@ -166,16 +174,16 @@ function SyncBar({ p }: { p: SyncProgress | null }) {
 function Welcome({ role, setRole, next, hasInvite }: { role: Role; setRole: (r: Role) => void; next: () => void; hasInvite: boolean }) {
   return (
     <div>
-      <StepHeader kicker="Bem-vindo" title="Um mundo de survival que nunca dorme">
+      <StepHeader title="Um mundo de survival que nunca dorme">
         O mundo fica nos PCs da turma e numa cópia protegida na nuvem. Quem clica em <b className="text-ink">Jogar</b> vira o servidor; se essa pessoa sair, outro amigo assume
         sozinho. Ninguém paga host nem mexe em rede.
       </StepHeader>
       {hasInvite && (
-        <div className="mb-4 animate-rise">
+        <div className="mb-4">
           <InfoNote tone="ok">Encontrei um convite. É só continuar.</InfoNote>
         </div>
       )}
-      <div className="grid grid-cols-2 gap-3 animate-rise">
+      <div className="grid grid-cols-2 gap-3">
         <RoleCard active={role === "friend"} onClick={() => setRole("friend")} icon={<Ticket className="size-5" />} title="Recebi um convite" text="Um amigo me mandou um link. Leva 2 minutos." />
         <RoleCard active={role === "owner"} onClick={() => setRole("owner")} icon={<Crown className="size-5" />} title="Vou criar o mundo" text="Eu publiquei a coordenação e vou trazer o mundo para a turma." />
       </div>
@@ -188,14 +196,15 @@ function RoleCard({ active, onClick, icon, title, text }: { active: boolean; onC
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={cx(
-        "text-left rounded-2xl p-5 ring-1 transition-all cursor-pointer",
-        active ? "bg-moss-500/10 ring-moss-500/50 shadow-[var(--shadow-glow)]" : "bg-night-850/70 ring-white/[0.06] hover:ring-white/15",
+        "text-left rounded-[var(--radius-card)] p-5 ring-1 ring-inset transition-colors cursor-pointer",
+        active ? "bg-sun-400/[0.09] ring-sun-400/60" : "bg-night-850/70 ring-white/[0.07] hover:ring-white/20",
       )}
     >
-      <div className={cx("size-10 rounded-xl flex items-center justify-center mb-3", active ? "bg-moss-500 text-night-950" : "bg-night-700 text-ink-soft")}>{icon}</div>
-      <div className="font-display text-[17px] font-semibold">{title}</div>
-      <div className="text-[13px] text-ink-muted mt-1">{text}</div>
+      <div className={cx("size-10 rounded-[10px] flex items-center justify-center mb-4", active ? "bg-sun-400 text-sun-900" : "bg-night-700 text-ink-soft")}>{icon}</div>
+      <div className="text-[16px] font-bold">{title}</div>
+      <div className="text-[13.5px] text-ink-muted mt-1">{text}</div>
     </button>
   );
 }
@@ -225,10 +234,10 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
   };
   return (
     <div>
-      <StepHeader kicker="Este PC" title="Onde o mundo vai morar aqui">
+      <StepHeader title="Onde o mundo vai morar aqui">
         Já deixei tudo sugerido. Só confira e aceite o EULA do Minecraft.
       </StepHeader>
-      <div className="space-y-4 animate-rise">
+      <div className="space-y-5">
         <Field label="Pasta dos dados do app" hint={`O mundo, o Java e o servidor ficam aqui (reserve uns ${bytes(4 * 1024 ** 3)}).${free ? ` Livre nesse disco: ${bytes(free)}.` : ""}`}>
           <div className="flex gap-2">
             <input className={inputCls} value={dir} onChange={(e) => setDir(e.target.value)} />
@@ -236,7 +245,7 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
               icon={<FolderOpen className="size-4" />}
               onClick={async () => {
                 const f = await open({ directory: true, defaultPath: dir || undefined });
-                if (typeof f === "string") setDir(f.endsWith("pAuletOr3") ? f : `${f}\\pAuletOr3`);
+                if (typeof f === "string") setDir(/\\(MachenCraft|pAuletOr3)$/i.test(f) ? f : `${f}\\MachenCraft`);
               }}
             >
               Trocar
@@ -261,11 +270,11 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
             </select>
           </Field>
         </div>
-        <label className="flex gap-3 items-start rounded-xl bg-night-850/70 ring-1 ring-white/[0.06] p-3.5 cursor-pointer">
-          <input type="checkbox" checked={eula} onChange={(e) => setEula(e.target.checked)} className="mt-1 accent-[var(--color-moss-500)]" />
+        <label className="flex gap-3 items-start rounded-xl bg-night-850/70 ring-1 ring-inset ring-white/[0.07] p-4 cursor-pointer">
+          <input type="checkbox" checked={eula} onChange={(e) => setEula(e.target.checked)} className="mt-1" />
           <span className="text-[13px] text-ink-soft">
             Li e aceito o{" "}
-            <button type="button" className="text-moss-300 underline cursor-pointer" onClick={() => openUrl("https://aka.ms/MinecraftEULA")}>
+            <button type="button" className="text-sun-300 underline underline-offset-2 cursor-pointer" onClick={() => openUrl("https://aka.ms/MinecraftEULA")}>
               EULA do Minecraft
             </button>
             , necessário para rodar o servidor oficial (baixado direto da Mojang) quando for a minha vez de hospedar.
@@ -304,10 +313,10 @@ function JoinStep({ invite, setInvite, next, back }: { invite: string; setInvite
   };
   return (
     <div>
-      <StepHeader kicker="Entrar" title="Cole o convite e escolha seu nick">
+      <StepHeader title="Cole o convite e escolha seu nick">
         O convite é o link que seu amigo mandou (ou o código que a página do link copiou).
       </StepHeader>
-      <div className="space-y-4 animate-rise">
+      <div className="space-y-5">
         <Field label="Convite" hint={invite && !looksLikeInvite(invite) ? "Isso não parece um convite. Copie o link inteiro, inclusive a parte depois do #." : undefined}>
           <div className="flex gap-2">
             <input className={cx(inputCls, "font-mono text-[12px]")} value={invite} onChange={(e) => setInvite(e.target.value)} placeholder="https://…/c/…#…  ou  P3J1.…" />
@@ -371,13 +380,13 @@ function WorldStep({ next, back }: { next: () => void; back: () => void }) {
   };
   return (
     <div>
-      <StepHeader kicker="O mundo" title="Criar o mundo da turma">
-        Use o endereço e a chave que o script <code className="text-moss-300">publicar-coordenacao.ps1</code> mostrou no final (ficam também no arquivo que ele salvou).
+      <StepHeader title="Criar o mundo da turma">
+        Use o endereço e a chave que o script <code className="font-mono text-[13px] text-sun-300">publicar-coordenacao.ps1</code> mostrou no final (ficam também no arquivo que ele salvou).
       </StepHeader>
-      <div className="space-y-4 animate-rise">
+      <div className="space-y-5">
         <div className="grid grid-cols-2 gap-3">
           <Field label="Endereço da coordenação">
-            <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://pauletor3-coordenacao….workers.dev" />
+            <input className={inputCls} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…workers.dev" />
           </Field>
           <Field label="Chave de administração">
             <input className={inputCls} type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="cole aqui" />
@@ -389,7 +398,7 @@ function WorldStep({ next, back }: { next: () => void; back: () => void }) {
           </Field>
           <NickField nick={nick} setNick={setNick} />
         </div>
-        <div className="rounded-2xl bg-night-850/70 ring-1 ring-white/[0.06] p-4">
+        <div className="rounded-[var(--radius-card)] bg-night-850/70 ring-1 ring-inset ring-white/[0.07] p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="font-semibold">
@@ -440,13 +449,13 @@ function InviteOut({ next }: { next: () => void }) {
   }, [run]);
   return (
     <div>
-      <StepHeader kicker="Convidar" title="Chame a turma">
+      <StepHeader title="Chame a turma">
         Mande este link para os amigos. Eles abrem no PC, baixam o app e entram — <b className="text-ink">sem conta e sem configurar nada</b>. Vale por 48 horas e 5 pessoas; dá para gerar
         outros depois na aba Mundo.
       </StepHeader>
-      <div className="animate-rise space-y-3">
+      <div className="space-y-3">
         {link ? (
-          <div className="rounded-2xl bg-night-950/60 ring-1 ring-moss-400/25 p-4">
+          <div className="rounded-2xl bg-night-950/60 ring-1 ring-inset ring-sun-400/25 p-4">
             <code className="block font-mono text-[12.5px] text-ink-soft break-all selectable">{link}</code>
             <div className="flex flex-wrap gap-2 mt-3">
               <Button icon={<Copy className="size-4" />} onClick={() => writeText(link)}>
@@ -483,18 +492,16 @@ function Done({ onDone, owner }: { onDone: () => void; owner: boolean }) {
     })();
   }, []);
   return (
-    <div className="text-center pt-6">
-      <div className="mx-auto size-20 rounded-3xl bg-moss-500/15 text-moss-300 flex items-center justify-center mb-5 animate-rise">
-        {phase === "ok" ? <PartyPopper className="size-9" /> : <Sparkles className="size-9 animate-pulse" />}
-      </div>
-      <h1 className="font-display text-[32px] font-bold tracking-tight animate-rise">Tudo pronto!</h1>
-      <p className="text-ink-soft mt-2 max-w-[460px] mx-auto animate-rise">
+    <div className="text-center pt-8">
+      <img src="/logo.png" alt="" className={cx("mx-auto size-28 mb-6", phase !== "ok" && "animate-pulse")} draggable={false} />
+      <h1 className="font-display text-[60px] leading-none">Tudo pronto</h1>
+      <p className="text-ink-soft mt-4 max-w-[470px] mx-auto leading-relaxed">
         {owner ? "Seu mundo está na nuvem e a turma já pode entrar pelo convite." : "Você faz parte do mundo."} Clique em <b className="text-ink">Jogar</b>: se alguém estiver
         hospedando, você entra direto; se não, o mundo acorda no seu PC. No Minecraft, o mundo aparece no Multiplayer como <b className="text-ink">pAuletOr 3</b>.
       </p>
-      <p className="text-[12.5px] text-ink-muted mt-3">O app abre com o Windows, discreto na bandeja, para manter sua cópia do mundo em dia.</p>
-      <div className="mt-8">
-        <Button variant="primary" onClick={onDone} disabled={phase !== "ok"}>
+      <p className="text-[13px] text-ink-muted mt-3">O app abre com o Windows, discreto na bandeja, para manter sua cópia do mundo em dia.</p>
+      <div className="mt-9">
+        <Button variant="primary" className="h-12 px-6 text-[15px]" onClick={onDone} disabled={phase !== "ok"}>
           Ir para o mundo <ArrowRight className="size-4" />
         </Button>
       </div>

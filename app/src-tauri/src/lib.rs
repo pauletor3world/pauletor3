@@ -1,4 +1,4 @@
-//! App desktop do pAuletOr 3 (Tauri 2). Toda a lógica mora no `pauletor3-core`;
+//! App desktop do Machen Craft (Tauri 2). Toda a lógica mora no `machencraft-core`;
 //! aqui ficam a ponte com a interface, a bandeja, as notificações e o ciclo de vida da janela.
 
 mod commands;
@@ -13,9 +13,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use pauletor3_core::events::{Event, EventSink, NoticeLevel};
-use pauletor3_core::paths::{self, Paths};
-use pauletor3_core::session::{EndReason, Engine, Phase};
+use machencraft_core::events::{Event, EventSink, NoticeLevel};
+use machencraft_core::paths::{self, Paths};
+use machencraft_core::session::{EndReason, Engine, Phase};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
@@ -26,7 +26,7 @@ pub struct AppState {
     pub console: Mutex<VecDeque<String>>,
     pub quitting: AtomicBool,
     pub start_minimized: bool,
-    /// Convite recebido por link (`pauletor3://entrar/...`) esperando o assistente.
+    /// Convite recebido por link (`machencraft://entrar/...`) esperando o assistente.
     pub pending_invite: Mutex<Option<String>>,
     /// Atualização encontrada, esperando o "Atualizar agora".
     pub update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
@@ -57,7 +57,7 @@ pub fn open_engine(app: &AppHandle, data_dir: PathBuf) -> anyhow::Result<Arc<Eng
     {
         let mut g = state.log_guard.lock().unwrap();
         if g.is_none() {
-            if let Ok(guard) = pauletor3_core::logging::init(&p.logs(), cfg!(debug_assertions)) {
+            if let Ok(guard) = machencraft_core::logging::init(&p.logs(), cfg!(debug_assertions)) {
                 *g = Some(Box::new(guard));
             }
         }
@@ -143,10 +143,10 @@ fn start_background(app: AppHandle, engine: Arc<Engine>) {
     });
 }
 
-/// Recebe um link `pauletor3://entrar/...` (app aberto pelo convite).
+/// Recebe um link `machencraft://entrar/...` (ou o antigo `pauletor3://`) do convite.
 fn handle_deep_links(app: &AppHandle, urls: Vec<String>) {
     for u in urls {
-        if u.starts_with("pauletor3://") {
+        if u.starts_with("machencraft://") || u.starts_with("pauletor3://") {
             *app.state::<AppState>().pending_invite.lock().unwrap() = Some(u.clone());
             let _ = app.emit("p3://invite", u);
             show_main(app);
@@ -186,7 +186,7 @@ pub fn quit(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
-    pauletor3_core::shutdown::request_early_notification();
+    machencraft_core::shutdown::request_early_notification();
     tauri::Builder::default()
         // precisa ser o primeiro plugin; com "deep-link", o link chega ao app que já está aberto
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
@@ -298,7 +298,7 @@ pub fn run() {
             setup::finish_setup,
         ])
         .build(tauri::generate_context!())
-        .expect("erro ao iniciar o pAuletOr 3")
+        .expect("erro ao iniciar o Machen Craft")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
                 // Sem janelas visíveis o app continua vivo na bandeja.

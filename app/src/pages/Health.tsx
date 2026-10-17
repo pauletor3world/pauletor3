@@ -65,7 +65,7 @@ export default function Health({ toast, onChange, onPage }: { toast: (t: Omit<To
                 {c.level === "ok" ? (
                   <CheckCircle2 className="size-5 text-moss-400 shrink-0" />
                 ) : c.level === "warn" ? (
-                  <TriangleAlert className="size-5 text-sun-400 shrink-0" />
+                  <TriangleAlert className="size-5 text-dusk-400 shrink-0" />
                 ) : (
                   <XCircle className="size-5 text-ember-400 shrink-0" />
                 )}

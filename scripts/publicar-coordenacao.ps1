@@ -1,4 +1,4 @@
-﻿# Publica (ou atualiza) a coordenação do pAuletOr 3 na SUA conta gratuita da Cloudflare.
+﻿# Publica (ou atualiza) a coordenação do Machen Craft na SUA conta gratuita da Cloudflare.
 # Feito uma vez pelo dono. Os amigos nunca precisam disso.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\publicar-coordenacao.ps1

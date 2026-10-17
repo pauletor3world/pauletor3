@@ -707,8 +707,8 @@ impl Engine {
         let hosting = self.is_hosting().await;
 
         // 1) o Minecraft deste PC está jogando?
-        // `PAULETOR3_PRETEND_PLAYING=1`: só para o teste automático de failover (sem cliente de jogo).
-        let pretend = std::env::var_os("PAULETOR3_PRETEND_PLAYING").is_some();
+        // `MACHENCRAFT_PRETEND_PLAYING=1`: só para o teste automático de failover (sem cliente de jogo).
+        let pretend = std::env::var_os("MACHENCRAFT_PRETEND_PLAYING").is_some();
         let playing = pretend || self.net.read().await.as_ref().and_then(|n| n.proxy.as_ref().map(|p| p.playing())).unwrap_or(false);
         if playing {
             *self.last_playing.lock().unwrap() = Some(tokio::time::Instant::now());
@@ -824,7 +824,7 @@ impl Engine {
                     } else if cfg.wake_on_join {
                         Route::idle()
                     } else {
-                        waiting("§aMundo livre §7— abra pelo app", "O mundo está fechado. Abra pelo app pAuletOr 3 (botão Jogar).", false)
+                        waiting("§aMundo livre §7— abra pelo app", "O mundo está fechado. Abra pelo app Machen Craft (botão Jogar).", false)
                     }
                 }
             }

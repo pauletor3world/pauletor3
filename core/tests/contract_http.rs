@@ -4,23 +4,23 @@
 //! Roda só com `P3_COORD_URL` e `P3_ADMIN` definidos, por exemplo:
 //! ```text
 //! cd coordinator && npx wrangler dev --local --port 8787     (ADMIN_TOKEN em .dev.vars)
-//! P3_COORD_URL=http://127.0.0.1:8787 P3_ADMIN=dev-admin-local cargo test -p pauletor3-core --test contract_http
+//! P3_COORD_URL=http://127.0.0.1:8787 P3_ADMIN=dev-admin-local cargo test -p machencraft-core --test contract_http
 //! ```
 
 use std::sync::Arc;
 
 use chrono::Utc;
-use pauletor3_core::coord::http::{self, ApiClient, HttpCoordinator};
-use pauletor3_core::coord::{Coordinator, InviteOptions, LeasePurpose, LeaseStatus, PrivateSettings, Presence, Role};
-use pauletor3_core::events::quiet;
-use pauletor3_core::invite::Invite;
-use pauletor3_core::lease::{LeaseConfig, LeaseManager};
-use pauletor3_core::manifest::{ManifestKind, ServerVersions};
-use pauletor3_core::p2p;
-use pauletor3_core::paths::Paths;
-use pauletor3_core::remote::{layout, CloudRemote, EncryptedRemote, Remote};
-use pauletor3_core::sync::{PullOutcome, PushMeta, SyncEngine};
-use pauletor3_core::NmError;
+use machencraft_core::coord::http::{self, ApiClient, HttpCoordinator};
+use machencraft_core::coord::{Coordinator, InviteOptions, LeasePurpose, LeaseStatus, PrivateSettings, Presence, Role};
+use machencraft_core::events::quiet;
+use machencraft_core::invite::Invite;
+use machencraft_core::lease::{LeaseConfig, LeaseManager};
+use machencraft_core::manifest::{ManifestKind, ServerVersions};
+use machencraft_core::p2p;
+use machencraft_core::paths::Paths;
+use machencraft_core::remote::{layout, CloudRemote, EncryptedRemote, Remote};
+use machencraft_core::sync::{PullOutcome, PushMeta, SyncEngine};
+use machencraft_core::NmError;
 
 fn env() -> Option<(String, String)> {
     Some((std::env::var("P3_COORD_URL").ok()?, std::env::var("P3_ADMIN").ok()?))
@@ -124,7 +124,7 @@ async fn full_contract_against_local_worker() {
 
     // diário
     owner
-        .post_events(&[pauletor3_core::coord::DiaryEvent { at: Utc::now(), kind: "opened".into(), player: Some("mchado".into()), text: "abriu".into() }])
+        .post_events(&[machencraft_core::coord::DiaryEvent { at: Utc::now(), kind: "opened".into(), player: Some("mchado".into()), text: "abriu".into() }])
         .await
         .unwrap();
     assert_eq!(friend.events(10).await.unwrap()[0].text, "abriu");

@@ -56,15 +56,15 @@ export default function World({ status, toast }: { status: Status | null; toast:
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {owner && (
-        <Card className="animate-rise overflow-hidden">
+        <Card className="overflow-hidden">
           <CardTitle aside={<Pill tone="sun">Dono</Pill>}>Convidar amigos</CardTitle>
           <div className="px-5 pb-5 space-y-4">
             <p className="text-ink-soft text-[13.5px]">
               Gere um link e mande pelo WhatsApp. O amigo abre no PC, baixa o app e entra — <b className="text-ink">sem criar conta</b>, sem configurar internet.
             </p>
             {link ? (
-              <div className="rounded-2xl bg-night-950/60 ring-1 ring-moss-400/20 p-4 animate-rise">
-                <div className="flex items-center gap-2 text-[12px] text-moss-300 mb-2">
+              <div className="rounded-2xl bg-night-950/60 ring-1 ring-inset ring-sun-400/25 p-4">
+                <div className="flex items-center gap-2 text-[12.5px] font-semibold text-sun-300 mb-2">
                   <Link2 className="size-4" /> Link pronto
                 </div>
                 <code className="block font-mono text-[12.5px] text-ink-soft break-all selectable">{link}</code>
@@ -93,7 +93,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
       )}
 
       {owner && pending.length > 0 && (
-        <Card className="animate-rise ring-1 ring-sun-400/30">
+        <Card className="ring-1 ring-sun-400/30">
           <CardTitle aside={<Pill tone="sun">{pending.length} esperando</Pill>}>Pedidos para entrar</CardTitle>
           <ul className="px-5 pb-5 space-y-2">
             {pending.map((m) => (
@@ -115,8 +115,8 @@ export default function World({ status, toast }: { status: Status | null; toast:
         </Card>
       )}
 
-      <Card className="animate-rise">
-        <CardTitle aside={<span className="text-[12px] text-ink-muted">{approved.length} membro(s)</span>}>Membros</CardTitle>
+      <Card>
+        <CardTitle aside={<span className="text-[12px] text-ink-muted">{approved.length} {approved.length === 1 ? "membro" : "membros"}</span>}>Membros</CardTitle>
         <ul className="px-5 pb-5 divide-y divide-white/[0.05]">
           {approved.map((m) => (
             <li key={m.id} className="flex items-center gap-3 py-2.5">
@@ -125,7 +125,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
                 <div className="font-semibold flex items-center gap-1.5">
                   {m.nick}
                   {m.role === "owner" && <Crown className="size-3.5 text-sun-400" />}
-                  {m.is_me && <span className="text-[11px] text-ink-faint font-normal">(você)</span>}
+                  {m.is_me && <span className="text-[12px] text-ink-faint font-medium">você</span>}
                 </div>
                 <div className="text-[11.5px] text-ink-muted">
                   {m.hosting ? "Hospedando agora" : m.playing ? "Jogando" : m.online ? "Online" : m.last_seen ? `Visto ${ago(m.last_seen)}` : "Ainda não apareceu"}
@@ -144,7 +144,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
 
       {owner && (
         <div className="grid grid-cols-2 gap-5">
-          <Card className="animate-rise">
+          <Card>
             <CardTitle>Convites ativos</CardTitle>
             <div className="px-5 pb-5">
               {invites.length === 0 ? (
@@ -174,7 +174,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
             </div>
           </Card>
 
-          <Card className="animate-rise">
+          <Card>
             <CardTitle>Diário no Discord (opcional)</CardTitle>
             <div className="px-5 pb-5 space-y-3">
               <p className="text-[13px] text-ink-soft">

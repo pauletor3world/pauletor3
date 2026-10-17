@@ -1,5 +1,5 @@
 {
-  // Coordenação do pAuletOr 3. Publicação: scripts/publicar-coordenacao.ps1 (faz tudo).
+  // Coordenação do Machen Craft. Publicação: scripts/publicar-coordenacao.ps1 (faz tudo).
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "pauletor3-coordenacao",
   "main": "src/index.ts",

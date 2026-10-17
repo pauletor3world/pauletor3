@@ -1,98 +1,51 @@
-"""Gera o ícone do app pAuletOr 3 (arte própria, sem assets da Mojang).
+"""Gera os ícones do Machen Craft a partir da identidade (pasta identidade/).
 
-Três camadas de colinas (o "3" do nome) sob um céu noturno com um sol âmbar.
+Entradas (arte final, não editar aqui):
+  identidade/machen-craft-v3-icone-2160.png        ícone do app (M de montanha)
+  identidade/machen-craft-pixelart-v3-1920x1080.png cena em pixel art (início do app)
+
 Saídas:
-  app/src-tauri/icons/app-icon.png   (1024x1024, fonte para `tauri icon`)
+  app/src-tauri/icons/app-icon.png   (1024x1024, fonte para `npx tauri icon`)
   app/src-tauri/icons/tray-*.png     (32x32: idle, hosting, busy, problem)
   app/public/logo.png                (256x256, usado na interface)
+  app/public/cena.png                (cena do início, sem perdas)
 
-Uso: python -I scripts/gerar-icones.py
+Uso: python -I scripts/gerar-icones.py && cd app && npx tauri icon src-tauri/icons/app-icon.png
 """
-import math
 import os
+import shutil
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ID = os.path.join(ROOT, "identidade")
 ICONS = os.path.join(ROOT, "app", "src-tauri", "icons")
 PUBLIC = os.path.join(ROOT, "app", "public")
-os.makedirs(ICONS, exist_ok=True)
-os.makedirs(PUBLIC, exist_ok=True)
 
-
-def lerp(a, b, t):
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(len(a)))
-
-
-def emblem(size, ss=3, rounded=True):
-    S = size * ss
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-
-    # Fundo: céu noturno em gradiente vertical, cantos arredondados.
-    sky = Image.new("RGBA", (S, S))
-    top, bottom = (16, 24, 44, 255), (22, 58, 60, 255)
-    px = sky.load()
-    for y in range(S):
-        c = lerp(top, bottom, y / (S - 1))
-        for x in range(S):
-            px[x, y] = c
-    mask = Image.new("L", (S, S), 0)
-    md = ImageDraw.Draw(mask)
-    r = int(S * 0.22) if rounded else 0
-    md.rounded_rectangle([0, 0, S - 1, S - 1], radius=r, fill=255)
-    img.paste(sky, (0, 0), mask)
-
-    d = ImageDraw.Draw(img)
-    # Estrelas.
-    for (fx, fy, fr) in [(0.18, 0.18, 0.010), (0.30, 0.10, 0.007), (0.42, 0.24, 0.006), (0.12, 0.34, 0.006), (0.55, 0.14, 0.008)]:
-        cx, cy, rr = fx * S, fy * S, fr * S
-        d.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], fill=(230, 236, 255, 200))
-
-    # Sol âmbar com halo.
-    sun_c, sun_r = (0.72 * S, 0.30 * S), 0.12 * S
-    halo = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    hd = ImageDraw.Draw(halo)
-    hd.ellipse([sun_c[0] - sun_r * 1.9, sun_c[1] - sun_r * 1.9, sun_c[0] + sun_r * 1.9, sun_c[1] + sun_r * 1.9], fill=(255, 190, 90, 90))
-    halo = halo.filter(ImageFilter.GaussianBlur(S * 0.04))
-    img = Image.alpha_composite(img, halo)
-    d = ImageDraw.Draw(img)
-    d.ellipse([sun_c[0] - sun_r, sun_c[1] - sun_r, sun_c[0] + sun_r, sun_c[1] + sun_r], fill=(255, 196, 92, 255))
-
-    # Três colinas (de trás para frente).
-    layers = [
-        (0.56, 0.20, 1.3, 0.0, (44, 120, 104, 255)),
-        (0.66, 0.16, 1.7, 1.4, (52, 160, 112, 255)),
-        (0.77, 0.12, 1.1, 2.6, (98, 204, 128, 255)),
-    ]
-    for base, amp, freq, phase, color in layers:
-        pts = [(0, S)]
-        for i in range(0, 101):
-            x = i / 100
-            y = base - amp * (0.55 * math.sin(math.pi * x * freq + phase) ** 2 + 0.45 * math.sin(math.pi * x)) * 0.9
-            pts.append((x * S, y * S))
-        pts.append((S, S))
-        layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-        ImageDraw.Draw(layer).polygon(pts, fill=color)
-        img = Image.alpha_composite(img, layer)
-
-    # Recorta tudo pela máscara arredondada.
-    out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    out.paste(img, (0, 0), mask)
-    return out.resize((size, size), Image.LANCZOS)
+icon = Image.open(os.path.join(ID, "machen-craft-v3-icone-2160.png")).convert("RGBA")
+icon.resize((1024, 1024), Image.LANCZOS).save(os.path.join(ICONS, "app-icon.png"))
+icon.resize((256, 256), Image.LANCZOS).save(os.path.join(PUBLIC, "logo.png"))
+shutil.copyfile(os.path.join(ID, "machen-craft-pixelart-v3-1920x1080.png"), os.path.join(PUBLIC, "cena.png"))
 
 
 def tray(state):
-    base = emblem(32, ss=8, rounded=True)
-    colors = {"hosting": (70, 220, 120), "busy": (255, 190, 70), "problem": (240, 80, 80)}
+    # Na bandeja (32 px) a moldura do ícone come espaço: usa só o miolo, mais justo no M.
+    S = 256
+    w = icon.width
+    box = (int(w * 0.09), int(w * 0.13), int(w * 0.91), int(w * 0.95))
+    img = icon.crop(box).resize((S, S), Image.LANCZOS)
+    mask = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, S - 1, S - 1], radius=S * 0.22, fill=255)
+    out = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    out.paste(img, (0, 0), mask)
+    colors = {"hosting": (124, 196, 82), "busy": (127, 176, 230), "problem": (226, 114, 95)}
     if state in colors:
-        d = ImageDraw.Draw(base)
-        d.ellipse([19, 19, 31, 31], fill=(12, 16, 28, 255))
-        d.ellipse([21, 21, 29, 29], fill=colors[state] + (255,))
-    return base
+        d = ImageDraw.Draw(out)
+        d.ellipse([S * 0.56, S * 0.56, S, S], fill=(11, 21, 43, 255))
+        d.ellipse([S * 0.63, S * 0.63, S * 0.93, S * 0.93], fill=colors[state] + (255,))
+    return out.resize((32, 32), Image.LANCZOS)
 
 
-emblem(1024).save(os.path.join(ICONS, "app-icon.png"))
-emblem(256).save(os.path.join(PUBLIC, "logo.png"))
-for s in ["idle", "hosting", "busy", "problem"]:
+for s in ("idle", "hosting", "busy", "problem"):
     tray(s).save(os.path.join(ICONS, f"tray-{s}.png"))
-print("ícones gerados")
+print("ok")

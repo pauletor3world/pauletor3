@@ -59,7 +59,7 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
         subtitle="A história da turma e cada versão salva. Qualquer versão pode ser restaurada — nada é apagado."
         aside={
           tab === "versions" && <label className="flex items-center gap-2 text-[12.5px] text-ink-muted cursor-pointer">
-            <input type="checkbox" checked={showCheckpoints} onChange={(e) => setShowCheckpoints(e.target.checked)} className="accent-[var(--color-moss-500)]" />
+            <input type="checkbox" checked={showCheckpoints} onChange={(e) => setShowCheckpoints(e.target.checked)} />
             Mostrar salvamentos automáticos
           </label>
         }
@@ -95,8 +95,8 @@ export default function Timeline({ status, toast }: { status: Status | null; toa
           </Card>
         )}
         {groups.map(([day, list]) => (
-          <section key={day} className="animate-rise">
-            <h2 className="text-[12px] uppercase tracking-wider text-ink-faint font-semibold mb-2 ml-1">{dateLong(list[0].created_at)}</h2>
+          <section key={day}>
+            <h2 className="text-[13px] font-bold text-ink-muted mb-2.5 ml-1 first-letter:uppercase">{dateLong(list[0].created_at)}</h2>
             <Card className="divide-y divide-white/[0.05]">
               {list.map((m) => (
                 <div key={m.id} className="flex items-center gap-4 px-5 py-3.5">
@@ -196,8 +196,8 @@ function DiaryFeed() {
         </Card>
       )}
       {days.map(([day, list]) => (
-        <Card key={day} className="animate-rise">
-          <div className="px-5 pt-4 pb-2 text-[12px] uppercase tracking-wider text-ink-faint">{dateLong(list[0].at)}</div>
+        <Card key={day}>
+          <div className="px-5 pt-4 pb-2 text-[13px] font-bold text-ink-muted first-letter:uppercase">{dateLong(list[0].at)}</div>
           <ul className="px-5 pb-4">
             {list.map((e, i) => (
               <li key={i} className="flex items-start gap-3 py-1.5">

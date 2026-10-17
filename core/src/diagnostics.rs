@@ -47,7 +47,7 @@ fn newest_log(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("pauletor3")).unwrap_or(false))
+        .filter(|p| p.file_name().and_then(|n| n.to_str()).map(|n| n.starts_with("machencraft") || n.starts_with("pauletor3")).unwrap_or(false))
         .collect();
     v.sort();
     v.pop()
@@ -57,7 +57,7 @@ pub async fn report(engine: &Engine, checks: &[Check]) -> String {
     let st = engine.status();
     let cfg = engine.config.read().await.clone();
     let mut r = String::new();
-    r.push_str("# Diagnóstico do pAuletOr 3\n\n");
+    r.push_str("# Diagnóstico do Machen Craft\n\n");
     r.push_str(&format!("- App: {}\n", crate::APP_VERSION));
     r.push_str(&format!("- Windows: {}\n", sysinfo::System::long_os_version().unwrap_or_default()));
     r.push_str(&format!("- RAM: {} MB · heap: {} MB\n", crate::heap::total_ram_mb(), crate::heap::effective_heap_mb(cfg.ram_mb)));

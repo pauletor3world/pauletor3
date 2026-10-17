@@ -6,7 +6,7 @@ members = ["core", "app/src-tauri"]
 version = "2.0.3"
 edition = "2021"
 license = "MIT"
-authors = ["pAuletOr 3"]
+authors = ["Machen"]
 
 [profile.release]
 lto = "thin"

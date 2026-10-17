@@ -11,7 +11,7 @@ const MAX = 3000;
 
 function lineTone(l: string) {
   if (/\/(ERROR|FATAL)\]/.test(l) || l.includes("Exception")) return "text-ember-400";
-  if (/\/WARN\]/.test(l)) return "text-sun-300";
+  if (/\/WARN\]/.test(l)) return "text-dusk-300";
   if (/ joined the game| left the game/.test(l)) return "text-moss-300";
   if (/has (made the advancement|reached the goal|completed the challenge)/.test(l)) return "text-dusk-400";
   return "text-ink-soft";
@@ -61,7 +61,7 @@ export default function Logs({ status, toast }: { status: Status | null; toast: 
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)]">
+    <div className="flex flex-col h-[calc(100vh-92px)]">
       <PageHeader
         title="Console do servidor"
         subtitle={status?.me_hosting ? "Ao vivo" : "Mostra o console quando este PC está hospedando."}

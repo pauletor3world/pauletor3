@@ -13,8 +13,8 @@ set -u
 E="${1:-/d/DevTools/p3v2-e2e}"
 WORLD="${2:-}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$ROOT/target/debug/pauletor3-cli.exe"
-[ -x "$CLI" ] || CLI="$ROOT/target/debug/pauletor3-cli"
+CLI="$ROOT/target/debug/machencraft-cli.exe"
+[ -x "$CLI" ] || CLI="$ROOT/target/debug/machencraft-cli"
 COORD="${P3_COORD_URL:-http://127.0.0.1:8787}"
 ADMIN="${P3_ADMIN:-dev-admin-local}"
 curl -sf "$COORD/health" >/dev/null || { echo "coordenação fora do ar em $COORD"; exit 1; }
@@ -35,7 +35,7 @@ cli B setup --accept-eula --checkpoint-minutes 1 --grace-minutes 30 --proxy-port
 cli C setup --proxy-port 25571 >/dev/null
 cli A prepare && cli B prepare || exit 1
 
-PAULETOR3_PRETEND_PLAYING=1 cli B up --stop-after 900 --stop-after-hosting 20 > "$E/B.log" 2>&1 &
+MACHENCRAFT_PRETEND_PLAYING=1 cli B up --stop-after 900 --stop-after-hosting 20 > "$E/B.log" 2>&1 &
 BPID=$!
 sleep 5
 cli A up --play --checkpoint-after 60 --crash-after 120 > "$E/A.log" 2>&1

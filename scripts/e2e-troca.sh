@@ -14,8 +14,8 @@
 set -u
 E="${1:-/d/DevTools/p3v2-e2e-troca}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-CLI="$ROOT/target/debug/pauletor3-cli.exe"
-[ -x "$CLI" ] || CLI="$ROOT/target/debug/pauletor3-cli"
+CLI="$ROOT/target/debug/machencraft-cli.exe"
+[ -x "$CLI" ] || CLI="$ROOT/target/debug/machencraft-cli"
 COORD="${P3_COORD_URL:-http://127.0.0.1:8787}"
 ADMIN="${P3_ADMIN:-dev-admin-local}"
 curl -sf "$COORD/health" >/dev/null || { echo "coordenação fora do ar em $COORD"; exit 1; }

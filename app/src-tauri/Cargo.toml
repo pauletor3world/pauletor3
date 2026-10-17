@@ -1,28 +1,28 @@
 [package]
-name = "pauletor3-app"
-description = "pAuletOr 3 — o nosso mundo de Minecraft, hospedado por turnos"
+name = "machencraft-app"
+description = "Machen Craft — o mundo de Minecraft da turma, hospedado por turnos"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "pauletor3_app_lib"
+name = "machencraft_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "pauletor3"
+name = "machen-craft"
 path = "src/main.rs"
 
 [features]
 default = []
 # Build pessoal (modo offline do servidor). Nunca distribuído.
-personal = ["pauletor3-core/personal"]
+personal = ["machencraft-core/personal"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-pauletor3-core = { path = "../../core" }
+machencraft-core = { path = "../../core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"

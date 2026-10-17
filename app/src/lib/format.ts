@@ -97,22 +97,22 @@ export function syncPct(s: Status): number | null {
 
 /** O estado do mundo em linguagem humana. */
 export function humanState(s: Status): { title: string; tone: "free" | "busy" | "live" | "warn" } {
-  if (s.recovery_pending && s.phase === "idle") return { title: "Sessão interrompida neste PC — vamos recuperar", tone: "warn" };
+  if (s.recovery_pending && s.phase === "idle") return { title: "A última sessão foi interrompida neste PC", tone: "warn" };
   if (s.failover) return { title: s.failover, tone: "busy" };
   if (s.phase !== "idle" && s.phase !== "hosting") {
     const pct = syncPct(s);
     return { title: `${phaseLabel[s.phase]}${pct != null ? ` ${Math.floor(pct)}%` : ""}…`, tone: "busy" };
   }
-  if (s.me_hosting) return { title: `Você está hospedando · ${s.online.length} online`, tone: "live" };
+  if (s.me_hosting) return { title: `Você está hospedando, ${s.online.length} no jogo`, tone: "live" };
   const l = heldLease(s.lease);
   if (l) {
     if (l.purpose === "maintenance") return { title: `${l.player} está fazendo manutenção`, tone: "busy" };
     if (l.handing_over) return { title: `${l.player} está passando a vez`, tone: "busy" };
-    return { title: `${l.player} está hospedando · ${l.online.length} online`, tone: "live" };
+    return { title: `${l.player} está hospedando, ${l.online.length} no jogo`, tone: "live" };
   }
   if (!s.coord_ok) return { title: "Sem conexão com a nuvem do mundo", tone: "warn" };
-  if (s.replicating) return { title: "Livre · atualizando a cópia deste PC", tone: "free" };
-  return { title: "Livre — clique em Jogar e o mundo acorda", tone: "free" };
+  if (s.replicating) return { title: "Livre: clique em Jogar e o mundo acorda no seu PC", tone: "free" };
+  return { title: "Livre: clique em Jogar e o mundo acorda no seu PC", tone: "free" };
 }
 
 /** Cor estável por nome (para avatares e gráficos). */

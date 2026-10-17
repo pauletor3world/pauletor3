@@ -4,13 +4,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use pauletor3_core::config::Config;
-use pauletor3_core::coord::InviteOptions;
-use pauletor3_core::events::quiet;
-use pauletor3_core::invite::Invite;
-use pauletor3_core::session::Engine;
-use pauletor3_core::versions::Versions;
-use pauletor3_core::{java, paths, server, util};
+use machencraft_core::config::Config;
+use machencraft_core::coord::InviteOptions;
+use machencraft_core::events::quiet;
+use machencraft_core::invite::Invite;
+use machencraft_core::session::Engine;
+use machencraft_core::versions::Versions;
+use machencraft_core::{java, paths, server, util};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
@@ -22,11 +22,11 @@ pub struct SetupSuggestion {
     pub suggested_dir: String,
     pub existing_dir: Option<String>,
     pub minecraft_dir: Option<String>,
-    pub launchers: Vec<pauletor3_core::launcher::LauncherCandidate>,
+    pub launchers: Vec<machencraft_core::launcher::LauncherCandidate>,
     /// Este build abre o Minecraft direto (o launcher é opcional).
     pub direct_launch: bool,
     pub free_space: Option<u64>,
-    /// Convite que abriu o app (link `pauletor3://...`), se houver.
+    /// Convite que abriu o app (link `machencraft://...`), se houver.
     pub pending_invite: Option<String>,
     /// Mundo que a v1 deixou neste PC (o mais recente), para importar.
     pub local_world: Option<String>,
@@ -40,9 +40,9 @@ pub async fn setup_suggest_dir(state: State<'_, AppState>) -> CmdResult<SetupSug
         free_space: util::free_space(&parent),
         suggested_dir: suggested.display().to_string(),
         existing_dir: paths::resolve_data_dir().map(|p| p.display().to_string()),
-        minecraft_dir: pauletor3_core::config::default_minecraft_dir().map(|p| p.display().to_string()),
-        launchers: pauletor3_core::launcher::detect(),
-        direct_launch: pauletor3_core::OFFLINE_MODE,
+        minecraft_dir: machencraft_core::config::default_minecraft_dir().map(|p| p.display().to_string()),
+        launchers: machencraft_core::launcher::detect(),
+        direct_launch: machencraft_core::OFFLINE_MODE,
         pending_invite: state.pending_invite.lock().unwrap().clone(),
         local_world: paths::resolve_data_dir()
             .map(|d| d.join("server").join("world"))
@@ -138,7 +138,7 @@ pub async fn create_world(state: State<'_, AppState>, args: CreateWorldArgs) -> 
 
 /// Um amigo entra pelo convite.
 #[tauri::command]
-pub async fn join_world(state: State<'_, AppState>, invite: String, nick: String) -> CmdResult<pauletor3_core::coord::http::JoinResult> {
+pub async fn join_world(state: State<'_, AppState>, invite: String, nick: String) -> CmdResult<machencraft_core::coord::http::JoinResult> {
     check_nick(&nick)?;
     let e = engine(&state)?;
     let r = e.join_world(&invite, &nick).await?;
@@ -149,12 +149,12 @@ pub async fn join_world(state: State<'_, AppState>, invite: String, nick: String
 
 /// Lê o nível de uma pasta de mundo (para mostrar antes de importar).
 #[tauri::command]
-pub async fn probe_world_folder(folder: String) -> CmdResult<pauletor3_core::players::LevelInfo> {
+pub async fn probe_world_folder(folder: String) -> CmdResult<machencraft_core::players::LevelInfo> {
     let f = PathBuf::from(folder);
     if !f.join("level.dat").exists() {
         return Err(CmdError::msg("Essa pasta não é um mundo", "Escolha a pasta que tem o arquivo level.dat dentro."));
     }
-    let info = pauletor3_core::players::level_info(&f)?;
+    let info = machencraft_core::players::level_info(&f)?;
     let v = Versions::builtin();
     if info.data_version > v.world_data_version {
         return Err(CmdError::msg(
@@ -205,8 +205,8 @@ pub async fn finish_setup(state: State<'_, AppState>) -> CmdResult<()> {
     // a entrada "pAuletOr 3" no Minecraft (localhost) já pode existir desde agora
     let cfg = e.config.read().await.clone();
     if let Some(mc) = &cfg.minecraft_dir {
-        if !pauletor3_core::launcher::client_running(None) {
-            let _ = pauletor3_core::serversdat::ensure_entry(mc, &cfg.game_address(), &e.paths.backups());
+        if !machencraft_core::launcher::client_running(None) {
+            let _ = machencraft_core::serversdat::ensure_entry(mc, &cfg.game_address(), &e.paths.backups());
         }
     }
     let _ = e.refresh().await;

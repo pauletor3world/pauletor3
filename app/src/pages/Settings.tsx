@@ -199,7 +199,7 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
 
 function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
   return (
-    <Card className="animate-rise">
+    <Card>
       <CardTitle aside={aside}>{title}</CardTitle>
       <div className="px-5 pb-5">{children}</div>
     </Card>

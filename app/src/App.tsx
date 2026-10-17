@@ -18,7 +18,7 @@ import World from "./pages/World";
 
 export default function App() {
   const [info, setInfo] = useState<AppInfo | null>(null);
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPage] = useState<Page>(() => (import.meta.env.DEV ? (new URLSearchParams(location.search).get("page") as Page | null) : null) ?? "home");
   const [update, setUpdate] = useState<{ version: string } | null>(null);
   const [updating, setUpdating] = useState(false);
   const [quitting, setQuitting] = useState(false);
@@ -82,8 +82,7 @@ export default function App() {
 
   if (!info.configured) {
     return (
-      <div className="h-full flex flex-col sky">
-        <TitleBar status={null} />
+      <div className="h-full sky">
         <Wizard
           onDone={() => {
             loadInfo();
@@ -94,38 +93,40 @@ export default function App() {
     );
   }
 
+  const isOwner = status?.is_owner ?? info.is_owner;
   return (
-    <div className="h-full flex flex-col sky">
-      <TitleBar status={status} />
-      {update && (
-        <div className="flex items-center justify-between gap-3 px-5 py-2 bg-sky-400/10 border-b border-sky-400/20 text-[12.5px] animate-fade">
-          <span className="text-ink-soft">
-            Nova versão <b className="text-ink">{update.version}</b> disponível.
-          </span>
-          <Button variant="ghost" className="h-7" busy={updating} icon={<Download className="size-4" />} onClick={installUpdate}>
-            Atualizar agora
-          </Button>
-        </div>
-      )}
-      <div className="flex-1 flex min-h-0">
-        <Sidebar page={page} onPage={setPage} isOwner={status?.is_owner ?? info.is_owner} version={info.version} healthBad={healthBad} />
-        <main className="flex-1 min-w-0 scroll">
-          <div className="max-w-[1080px] mx-auto px-8 py-7">
+    <div className="h-full flex sky">
+      <Sidebar page={page} onPage={setPage} isOwner={isOwner} version={info.version} healthBad={healthBad} status={status} />
+      <div className="flex-1 min-w-0 flex flex-col">
+        <TitleBar>
+          {update && (
+            <span className="flex items-center gap-2.5 animate-fade">
+              <span className="text-ink-soft">
+                A versão <b className="text-ink">{update.version}</b> está pronta.
+              </span>
+              <Button variant="ghost" className="h-7 px-2.5 text-sun-300" busy={updating} icon={<Download className="size-4" />} onClick={installUpdate}>
+                Atualizar agora
+              </Button>
+            </span>
+          )}
+        </TitleBar>
+        <main className="flex-1 min-h-0 scroll">
+          <div className="max-w-[1080px] mx-auto px-8 pt-3 pb-10">
             {page === "home" && <HomePage status={status} onPage={setPage} toast={push} />}
             {page === "world" && <World status={status} toast={push} />}
             {page === "timeline" && <Timeline status={status} toast={push} />}
             {page === "stats" && <StatsPage />}
             {page === "health" && <Health toast={push} onChange={(bad) => setHealthBad(bad)} onPage={setPage} />}
             {page === "logs" && <Logs status={status} toast={push} />}
-            {page === "players" && (status?.is_owner ?? info.is_owner) && <Players status={status} toast={push} />}
-            {page === "settings" && <SettingsPage status={status} isOwner={status?.is_owner ?? info.is_owner} toast={push} />}
+            {page === "players" && isOwner && <Players status={status} toast={push} />}
+            {page === "settings" && <SettingsPage status={status} isOwner={isOwner} toast={push} />}
           </div>
         </main>
       </div>
       <Toasts toasts={toasts} dismiss={dismiss} />
       <Modal open={quitting} title="Salvando o mundo antes de sair" onClose={() => {}}>
         <div className="flex items-center gap-3 py-2">
-          <Loader2 className="size-5 animate-spin text-moss-400" />
+          <Loader2 className="size-5 animate-spin text-sun-400 shrink-0" />
           <span>Fechando o servidor e guardando o mundo. O app fecha sozinho quando terminar.</span>
         </div>
       </Modal>

@@ -40,7 +40,7 @@ impl std::fmt::Debug for Invite {
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum InviteError {
-    #[error("isso não parece um convite do pAuletOr 3")]
+    #[error("isso não parece um convite do Machen Craft")]
     Format,
 }
 
@@ -67,10 +67,10 @@ impl Invite {
         Self { base: base.trim_end_matches('/').to_string(), token: token.to_string(), key: B64.encode(world_key) }
     }
 
-    /// Aceita o link, o código `P3J1.` ou o deep link `pauletor3://entrar/<código>`.
+    /// Aceita o link, o código `P3J1.` ou o deep link `machencraft://entrar/<código>` (ou o antigo `pauletor3://`).
     pub fn parse(input: &str) -> Result<Self, InviteError> {
         let s = input.trim().trim_matches(|c| c == '<' || c == '>' || c == '"');
-        let s = s.strip_prefix("pauletor3://entrar/").unwrap_or(s);
+        let s = s.strip_prefix("machencraft://entrar/").or_else(|| s.strip_prefix("pauletor3://entrar/")).unwrap_or(s);
         if let Some(rest) = s.strip_prefix(CODE_PREFIX) {
             let bytes = B64.decode(rest.trim_end_matches('/')).map_err(|_| InviteError::Format)?;
             let inv: Invite = serde_json::from_slice(&bytes).map_err(|_| InviteError::Format)?;
@@ -113,6 +113,7 @@ mod tests {
         assert!(link.starts_with("https://p3.exemplo.workers.dev/c/w123.segredoABC#"));
         assert_eq!(Invite::parse(&link).unwrap(), inv);
         assert_eq!(Invite::parse(&inv.code()).unwrap(), inv);
+        assert_eq!(Invite::parse(&format!("machencraft://entrar/{}", inv.code())).unwrap(), inv);
         assert_eq!(Invite::parse(&format!("pauletor3://entrar/{}", inv.code())).unwrap(), inv);
         assert_eq!(inv.world_id(), "w123");
         assert_eq!(*inv.world_key().unwrap(), [9u8; 32]);

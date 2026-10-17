@@ -1,6 +1,6 @@
-//! pauletor3-cli — a mesma lógica do app, pela linha de comando (testes e emergências).
+//! machencraft-cli — a mesma lógica do app, pela linha de comando (testes e emergências).
 //!
-//! Pasta de dados: `--home` ou `PAULETOR3_HOME` (padrão: a mesma do app). Com pastas
+//! Pasta de dados: `--home` ou `MACHENCRAFT_HOME` (padrão: a mesma do app). Com pastas
 //! diferentes, dá para simular vários "PCs" na mesma máquina.
 
 use std::path::PathBuf;
@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use pauletor3_core::coord::InviteOptions;
-use pauletor3_core::events::{Event, EventSink};
-use pauletor3_core::paths::{self, Paths};
-use pauletor3_core::session::{EndReason, Engine};
-use pauletor3_core::{health, util};
+use machencraft_core::coord::InviteOptions;
+use machencraft_core::events::{Event, EventSink};
+use machencraft_core::paths::{self, Paths};
+use machencraft_core::session::{EndReason, Engine};
+use machencraft_core::{health, util};
 
 #[derive(Parser)]
-#[command(name = "pauletor3-cli", version, about = "pAuletOr 3 pela linha de comando")]
+#[command(name = "machencraft-cli", version, about = "Machen Craft pela linha de comando")]
 struct Cli {
     /// Pasta de dados do app.
     #[arg(long, global = true)]
@@ -142,7 +142,7 @@ enum Cmd {
     Fingerprint { server_dir: PathBuf },
 }
 
-fn e(err: pauletor3_core::NmError) -> anyhow::Error {
+fn e(err: machencraft_core::NmError) -> anyhow::Error {
     anyhow::anyhow!("{err}")
 }
 
@@ -165,7 +165,7 @@ async fn main() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("pasta de dados não definida; use --home"))?;
     let p = Paths::new(&home);
     p.ensure()?;
-    let _log = pauletor3_core::logging::init(&p.logs(), true)?;
+    let _log = machencraft_core::logging::init(&p.logs(), true)?;
 
     let printer: EventSink = Arc::new(|e: Event| match e {
         Event::Sync(s) => eprint!("\r{:<22} {:>5.1}%   ", s.phase.label(), s.percent()),
@@ -173,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
         Event::PlayerJoined { name } => eprintln!("\n+ {name}"),
         Event::PlayerLeft { name } => eprintln!("\n- {name}"),
         Event::ServerLog { line } => {
-            if std::env::var_os("PAULETOR3_CONSOLE").is_some() {
+            if std::env::var_os("MACHENCRAFT_CONSOLE").is_some() {
                 eprintln!("  | {line}")
             }
         }
@@ -283,19 +283,19 @@ async fn main() -> anyhow::Result<()> {
         }
         Cmd::Pull => {
             let b = engine.backend().await.map_err(e)?;
-            let se = pauletor3_core::sync::SyncEngine::new(b.remote, b.coord, p.clone());
+            let se = machencraft_core::sync::SyncEngine::new(b.remote, b.coord, p.clone());
             let o = se.pull(Arc::new(|_| {})).await.map_err(e)?;
             println!("{o:?}");
         }
         Cmd::Prepare => {
             let v = match engine.backend().await {
-                Ok(b) => pauletor3_core::versions::Versions::load(&*b.remote).await.map_err(e)?.unwrap_or_else(pauletor3_core::versions::Versions::builtin),
-                Err(_) => pauletor3_core::versions::Versions::builtin(),
+                Ok(b) => machencraft_core::versions::Versions::load(&*b.remote).await.map_err(e)?.unwrap_or_else(machencraft_core::versions::Versions::builtin),
+                Err(_) => machencraft_core::versions::Versions::builtin(),
             };
-            let java = pauletor3_core::java::ensure_java(&p, &v, pauletor3_core::events::quiet()).await.map_err(e)?;
-            pauletor3_core::server::prepare(&p, &v, pauletor3_core::events::quiet()).await.map_err(e)?;
-            pauletor3_core::server::verify_install(&p, &v).map_err(e)?;
-            pauletor3_core::server::warm_up(&p, &java).await.map_err(e)?;
+            let java = machencraft_core::java::ensure_java(&p, &v, machencraft_core::events::quiet()).await.map_err(e)?;
+            machencraft_core::server::prepare(&p, &v, machencraft_core::events::quiet()).await.map_err(e)?;
+            machencraft_core::server::verify_install(&p, &v).map_err(e)?;
+            machencraft_core::server::warm_up(&p, &java).await.map_err(e)?;
             println!("Java e servidor prontos");
         }
         Cmd::Health => {
@@ -307,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Diagnose => {
             let _ = engine.refresh().await;
             let checks = health::run(&engine).await;
-            println!("{}", pauletor3_core::diagnostics::report(&engine, &checks).await);
+            println!("{}", machencraft_core::diagnostics::report(&engine, &checks).await);
         }
         Cmd::Stats => {
             println!("{}", serde_json::to_string_pretty(&engine.stats().await.map_err(e)?)?);
@@ -361,7 +361,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", serde_json::to_string_pretty(&m)?);
         }
         Cmd::Fingerprint { server_dir } => {
-            for (k, v) in pauletor3_core::sync::SyncEngine::fingerprint(&server_dir)? {
+            for (k, v) in machencraft_core::sync::SyncEngine::fingerprint(&server_dir)? {
                 println!("{}  {}", v.hash, k);
             }
         }
@@ -386,7 +386,7 @@ async fn run_up(
         println!("proxy local em {a}");
     }
     if play {
-        engine.play_with(pauletor3_core::session::PlayTrigger::Button, false).await.map_err(e)?;
+        engine.play_with(machencraft_core::session::PlayTrigger::Button, false).await.map_err(e)?;
         println!("\nhospedando");
     }
     let started = tokio::time::Instant::now();

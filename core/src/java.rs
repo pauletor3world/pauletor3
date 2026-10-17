@@ -19,7 +19,7 @@ pub async fn download_verified(pinned: &PinnedFile, dest: &Path, progress: SyncP
     }
     let tmp = dest.with_extension("baixando");
     let client = reqwest::Client::builder()
-        .user_agent(concat!("pAuletOr3/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3)"))
+        .user_agent(concat!("MachenCraft/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3world)"))
         .build()
         .map_err(|e| NmError::Other(e.into()))?;
     let resp = client

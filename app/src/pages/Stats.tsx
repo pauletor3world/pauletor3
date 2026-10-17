@@ -1,7 +1,7 @@
-import { BarChart3, CalendarDays, Crown, Flame, Moon, Skull, Swords, Timer, Trophy } from "lucide-react";
+import { BarChart3, Flame, Moon, Skull, Timer, Trophy } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Avatar } from "../components/Avatar";
-import { Card, CardTitle, Empty, ErrorBanner, PageHeader } from "../components/ui";
+import { Card, CardTitle, Empty, ErrorBanner, PageHeader, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { duration, hours, hue } from "../lib/format";
 import { useAction } from "../lib/hooks";
@@ -59,15 +59,18 @@ export default function StatsPage() {
       ) : (
         stats && (
           <div className="space-y-5">
-            <div className="grid grid-cols-4 gap-4">
-              <Kpi icon={<Timer className="size-5" />} label="Tempo jogado" value={hours(totalSecs)} accent="moss" />
-              <Kpi icon={<Swords className="size-5" />} label="Sessões" value={String(stats.sessions)} accent="sky" />
-              <Kpi icon={<CalendarDays className="size-5" />} label="Dias jogados" value={String(stats.days.length)} accent="sun" />
-              <Kpi icon={<Crown className="size-5" />} label="Quem mais hospedou" value={topHost ? topHost[0] : "—"} sub={topHost ? `${topHost[1]} sessões` : undefined} accent="dusk" />
-            </div>
+            <Card className="grid grid-cols-4 px-6 py-5">
+              <Stat label="Tempo jogado" value={hours(totalSecs)} />
+              <Stat label="Sessões" value={String(stats.sessions)} className="pl-6 border-l border-white/[0.06]" />
+              <Stat label="Dias jogados" value={String(stats.days.length)} className="pl-6 border-l border-white/[0.06]" />
+              <div className="pl-6 border-l border-white/[0.06] min-w-0">
+                <Stat label="Quem mais hospedou" value={topHost ? topHost[0] : "—"} />
+                {topHost && <div className="text-[12.5px] text-ink-faint mt-1">{topHost[1]} sessões</div>}
+              </div>
+            </Card>
 
             <div className="grid grid-cols-5 gap-5">
-              <Card className="col-span-3 animate-rise">
+              <Card className="col-span-3">
                 <CardTitle>Tempo jogado por pessoa</CardTitle>
                 <ul className="px-5 pb-5 space-y-3">
                   {players.map((p) => (
@@ -92,7 +95,7 @@ export default function StatsPage() {
                 </ul>
               </Card>
 
-              <Card className="col-span-2 animate-rise">
+              <Card className="col-span-2">
                 <CardTitle>Marcos do mundo</CardTitle>
                 <ul className="px-5 pb-5 space-y-2.5 text-[13px]">
                   <Milestone icon={<Flame className="size-4 text-ember-400" />} label="Primeira ida ao Nether" value={stats.firsts.nether} />
@@ -106,13 +109,13 @@ export default function StatsPage() {
                   <li className="flex items-center gap-2.5">
                     <Skull className="size-4 text-ink-muted" />
                     <span className="text-ink-muted flex-1">Mais mortes (60 dias)</span>
-                    <span className="font-semibold">{deaths[0] ? `${deaths[0][0]} · ${deaths[0][1]}` : "ninguém morreu 🎉"}</span>
+                    <span className="font-semibold">{deaths[0] ? `${deaths[0][0]} · ${deaths[0][1]}` : "ninguém morreu"}</span>
                   </li>
                 </ul>
               </Card>
             </div>
 
-            <Card className="animate-rise">
+            <Card>
               <CardTitle aside={<span className="text-[12px] text-ink-muted">últimos 70 dias</span>}>Dias jogados</CardTitle>
               <div className="px-5 pb-5">
                 <div className="grid grid-flow-col grid-rows-7 gap-1.5 w-fit">
@@ -120,9 +123,9 @@ export default function StatsPage() {
                     <div
                       key={h.date}
                       title={`${new Date(h.date + "T12:00:00").toLocaleDateString("pt-BR")}${h.on ? ` · ${hours(h.secs)}` : ""}`}
-                      className="size-3.5 rounded-[4px]"
+                      className="size-3.5 rounded-[2px]"
                       style={{
-                        background: h.on ? `rgb(76 199 122 / ${0.25 + 0.75 * (h.secs / maxHeat)})` : "rgb(255 255 255 / 0.04)",
+                        background: h.on ? `rgb(138 203 92 / ${0.25 + 0.75 * (h.secs / maxHeat)})` : "rgb(255 255 255 / 0.04)",
                       }}
                     />
                   ))}
@@ -133,18 +136,6 @@ export default function StatsPage() {
         )
       )}
     </div>
-  );
-}
-
-function Kpi({ icon, label, value, sub, accent }: { icon: React.ReactNode; label: string; value: string; sub?: string; accent: "moss" | "sky" | "sun" | "dusk" }) {
-  const c = { moss: "text-moss-400 bg-moss-500/10", sky: "text-sky-400 bg-sky-400/10", sun: "text-sun-400 bg-sun-400/10", dusk: "text-dusk-400 bg-dusk-400/10" }[accent];
-  return (
-    <Card className="p-4 animate-rise">
-      <div className={`size-9 rounded-xl flex items-center justify-center ${c}`}>{icon}</div>
-      <div className="text-[12px] text-ink-muted mt-3">{label}</div>
-      <div className="font-display text-[24px] font-bold tracking-tight truncate">{value}</div>
-      {sub && <div className="text-[12px] text-ink-faint">{sub}</div>}
-    </Card>
   );
 }
 

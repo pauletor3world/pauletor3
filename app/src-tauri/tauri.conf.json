@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "pAuletOr 3",
+  "productName": "Machen Craft",
   "version": "2.0.3",
-  "identifier": "com.pauletor3.app",
+  "identifier": "com.machen.craft",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "pAuletOr 3",
+        "title": "Machen Craft",
         "width": 1200,
         "height": 780,
         "minWidth": 980,
@@ -21,7 +21,7 @@
         "decorations": false,
         "visible": false,
         "center": true,
-        "backgroundColor": "#0b1020"
+        "backgroundColor": "#0a1124"
       }
     ],
     "security": {
@@ -33,10 +33,10 @@
     "targets": [
       "nsis"
     ],
-    "publisher": "pAuletOr 3",
-    "shortDescription": "O nosso mundo de Minecraft, sempre no ar entre amigos",
+    "publisher": "Machen",
+    "shortDescription": "Machen Craft — o mundo de Minecraft da turma, sempre no ar",
     "longDescription": "O mundo fica nos PCs do grupo e numa cópia cifrada na nuvem. Quem clica em Jogar hospeda; se o host sair, outro assume sozinho.",
-    "copyright": "pAuletOr 3",
+    "copyright": "Machen",
     "category": "Game",
     "icon": [
       "icons/32x32.png",
@@ -75,6 +75,7 @@
     "deep-link": {
       "desktop": {
         "schemes": [
+          "machencraft",
           "pauletor3"
         ]
       }

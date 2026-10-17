@@ -54,7 +54,7 @@ async function serveInstaller(env: Env): Promise<Response | null> {
     headers: {
       "content-type": "application/vnd.microsoft.portable-executable",
       "content-length": String(o.size),
-      "content-disposition": `attachment; filename="pAuletOr3-${r.version}-setup.exe"`,
+      "content-disposition": `attachment; filename="MachenCraft-${r.version}-setup.exe"`,
       "cache-control": "no-store",
     },
   });

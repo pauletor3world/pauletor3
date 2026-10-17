@@ -208,7 +208,7 @@ async fn handle(
             }
         }
         if tokio::time::Instant::now() >= deadline {
-            return disconnect(&mut sock, "O mundo demorou demais para abrir.\n\nVeja o app pAuletOr 3 e tente de novo.").await;
+            return disconnect(&mut sock, "O mundo demorou demais para abrir.\n\nVeja o app Machen Craft e tente de novo.").await;
         }
         // espera a rota mudar (ou tenta de novo em alguns segundos), sem deixar o jogo desistir
         keep_alive_while(&mut sock, &mut ka, async {

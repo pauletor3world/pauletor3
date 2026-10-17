@@ -39,7 +39,7 @@ pub async fn prepare(paths: &Paths, v: &Versions, progress: SyncProgressFn) -> N
     }
     std::fs::write(
         dir.join("fabric-server-launcher.properties"),
-        "#Gerenciado pelo pAuletOr 3\nserverJar=server.jar\n",
+        "#Gerenciado pelo Machen Craft\nserverJar=server.jar\n",
     )?;
     Ok(())
 }
@@ -83,7 +83,7 @@ pub fn accept_eula(paths: &Paths) -> std::io::Result<()> {
     std::fs::create_dir_all(paths.server())?;
     std::fs::write(
         paths.server().join("eula.txt"),
-        "#Aceito pelo jogador no assistente do pAuletOr 3 (https://aka.ms/MinecraftEULA)\neula=true\n",
+        "#Aceito pelo jogador no assistente do Machen Craft (https://aka.ms/MinecraftEULA)\neula=true\n",
     )
 }
 
@@ -214,7 +214,7 @@ pub fn write_properties(paths: &Paths, s: &WorldSettings, port: u16, rcon_passwo
     for (k, v) in managed {
         props.insert(k.to_string(), v);
     }
-    let mut out = String::from("#Gerenciado pelo pAuletOr 3. Alterações manuais nas chaves gerenciadas são sobrescritas.\n");
+    let mut out = String::from("#Gerenciado pelo Machen Craft. Alterações manuais nas chaves gerenciadas são sobrescritas.\n");
     for (k, v) in props {
         out.push_str(&format!("{k}={v}\n"));
     }
@@ -362,7 +362,7 @@ impl ServerProcess {
 
     /// Mensagem no chat do jogo (para avisos de "passar a vez").
     pub async fn say(&self, text: &str) -> NmResult<()> {
-        let json = serde_json::json!(["", {"text": "[pAuletOr 3] ", "color": "gold"}, {"text": text, "color": "yellow"}]);
+        let json = serde_json::json!(["", {"text": "[Machen Craft] ", "color": "gold"}, {"text": text, "color": "yellow"}]);
         self.cmd(&format!("tellraw @a {json}")).await.map(|_| ())
     }
 

@@ -1,4 +1,4 @@
-//! Núcleo do pAuletOr 3.
+//! Núcleo do Machen Craft.
 //!
 //! Tudo que importa para a integridade do mundo mora aqui: o modelo de sincronização
 //! endereçado por conteúdo ([`sync`]), a trava de host ([`lock`]), o ciclo do servidor
