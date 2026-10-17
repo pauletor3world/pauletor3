@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Machen Craft",
-  "version": "2.1.0",
+  "productName": "Machenia",
+  "version": "2.2.0",
   "identifier": "com.machen.craft",
   "build": {
     "frontendDist": "../dist",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Machen Craft",
+        "title": "Machenia",
         "width": 1200,
         "height": 780,
         "minWidth": 980,
@@ -34,7 +34,7 @@
       "nsis"
     ],
     "publisher": "Machen",
-    "shortDescription": "Machen Craft — o mundo de Minecraft do grupo, sempre no ar",
+    "shortDescription": "Machenia — o mundo de Minecraft do grupo, sempre no ar",
     "longDescription": "O mundo fica nos PCs do grupo e numa cópia cifrada na nuvem. Quem clica em Jogar hospeda; se o host sair, outro assume sozinho.",
     "copyright": "Machen",
     "category": "Game",
@@ -58,6 +58,8 @@
         ],
         "displayLanguageSelector": false,
         "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/instalador-cabecalho.bmp",
+        "sidebarImage": "icons/instalador-lateral.bmp",
         "installerHooks": "./installer-hooks.nsh"
       }
     }
@@ -73,6 +75,7 @@
     "deep-link": {
       "desktop": {
         "schemes": [
+          "machenia",
           "machencraft",
           "pauletor3"
         ]

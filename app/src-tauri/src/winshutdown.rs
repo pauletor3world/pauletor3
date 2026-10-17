@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::OnceLock;
 
-use machencraft_core::session::EndReason;
+use machenia_core::session::EndReason;
 use tauri::{AppHandle, Manager};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
@@ -33,7 +33,7 @@ pub fn install(app: AppHandle, hwnd: isize) {
 
 unsafe extern "system" fn subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     if msg == WM_QUERYENDSESSION && BUSY.load(Ordering::SeqCst) {
-        machencraft_core::shutdown::block(hwnd.0 as isize, "Machen Craft está salvando o mundo… não force o desligamento.");
+        machenia_core::shutdown::block(hwnd.0 as isize, "Machenia está salvando o mundo… não force o desligamento.");
         if !SAVING.swap(true, Ordering::SeqCst) {
             if let Some(app) = APP.get() {
                 let app = app.clone();
@@ -42,7 +42,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     if let Some(engine) = app.state::<crate::AppState>().engine() {
                         let _ = engine.stop(EndReason::Shutdown).await;
                     }
-                    machencraft_core::shutdown::unblock(HWND_VAL.load(Ordering::SeqCst));
+                    machenia_core::shutdown::unblock(HWND_VAL.load(Ordering::SeqCst));
                     // Com o mundo salvo, o app sai e o Windows segue com o desligamento.
                     app.state::<crate::AppState>().quitting.store(true, Ordering::SeqCst);
                     app.exit(0);

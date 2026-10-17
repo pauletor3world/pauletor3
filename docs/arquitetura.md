@@ -5,7 +5,7 @@ flowchart LR
   subgraph PC1["PC de quem hospeda"]
     MC1["Minecraft"] -->|"localhost:25565"| PX1["proxy local"]
     PX1 --> SRV["servidor Fabric 1.21.11 + Lithium<br/>127.0.0.1:25566 · RCON 127.0.0.1"]
-    CORE1["machencraft-core<br/>(sessão, sync, lease)"] --> SRV
+    CORE1["machenia-core<br/>(sessão, sync, lease)"] --> SRV
   end
   subgraph PC2["PC de um amigo"]
     MC2["Minecraft"] -->|"localhost:25565"| PX2["proxy local"]

@@ -319,7 +319,7 @@ impl Job {
 
 fn http() -> NmResult<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(concat!("MachenCraft/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3world)"))
+        .user_agent(concat!("Machenia/", env!("CARGO_PKG_VERSION"), " (github.com/pauletor3world)"))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))
         .build()
@@ -694,7 +694,7 @@ impl Installed {
         vars.insert("natives_directory", self.layout.natives(&self.meta.id).display().to_string());
         vars.insert("library_directory", self.layout.libraries().display().to_string());
         vars.insert("classpath_separator", if cfg!(windows) { ";" } else { ":" }.to_string());
-        vars.insert("launcher_name", "MachenCraft".into());
+        vars.insert("launcher_name", "Machenia".into());
         vars.insert("launcher_version", crate::APP_VERSION.into());
         vars.insert("classpath", self.classpath_with(overlay));
         if let Some(q) = &o.quick_play {

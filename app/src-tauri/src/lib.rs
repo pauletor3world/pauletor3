@@ -1,4 +1,4 @@
-//! App desktop do Machen Craft (Tauri 2). Toda a lógica mora no `machencraft-core`;
+//! App desktop do Machenia (Tauri 2). Toda a lógica mora no `machenia-core`;
 //! aqui ficam a ponte com a interface, a bandeja, as notificações e o ciclo de vida da janela.
 
 mod atualizacao;
@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use machencraft_core::events::{Event, EventSink, NoticeLevel};
-use machencraft_core::paths::{self, Paths};
-use machencraft_core::session::{EndReason, Engine, Phase};
+use machenia_core::events::{Event, EventSink, NoticeLevel};
+use machenia_core::paths::{self, Paths};
+use machenia_core::session::{EndReason, Engine, Phase};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
@@ -27,7 +27,7 @@ pub struct AppState {
     pub console: Mutex<VecDeque<String>>,
     pub quitting: AtomicBool,
     pub start_minimized: bool,
-    /// Convite recebido por link (`machencraft://entrar/...`) esperando o assistente.
+    /// Convite recebido por link (`machenia://entrar/...`) esperando o assistente.
     pub pending_invite: Mutex<Option<String>>,
     /// Serviço de atualização do app (procura, baixa e instala no momento seguro).
     pub atualizacao: atualizacao::Servico,
@@ -58,7 +58,7 @@ pub fn open_engine(app: &AppHandle, data_dir: PathBuf) -> anyhow::Result<Arc<Eng
     {
         let mut g = state.log_guard.lock().unwrap();
         if g.is_none() {
-            if let Ok(guard) = machencraft_core::logging::init(&p.logs(), cfg!(debug_assertions)) {
+            if let Ok(guard) = machenia_core::logging::init(&p.logs(), cfg!(debug_assertions)) {
                 *g = Some(Box::new(guard));
             }
         }
@@ -145,10 +145,10 @@ fn start_background(app: AppHandle, engine: Arc<Engine>) {
     });
 }
 
-/// Recebe um link `machencraft://entrar/...` (ou o antigo `pauletor3://`) do convite.
+/// Recebe um link `machenia://entrar/...` (ou os antigos `machencraft://` e `pauletor3://`) do convite.
 fn handle_deep_links(app: &AppHandle, urls: Vec<String>) {
     for u in urls {
-        if u.starts_with("machencraft://") || u.starts_with("pauletor3://") {
+        if ["machenia://", "machencraft://", "pauletor3://"].iter().any(|p| u.starts_with(p)) {
             *app.state::<AppState>().pending_invite.lock().unwrap() = Some(u.clone());
             let _ = app.emit("p3://invite", u);
             show_main(app);
@@ -191,7 +191,7 @@ pub fn quit(app: &AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let start_minimized = std::env::args().any(|a| a == "--minimized");
-    machencraft_core::shutdown::request_early_notification();
+    machenia_core::shutdown::request_early_notification();
     tauri::Builder::default()
         // precisa ser o primeiro plugin; com "deep-link", o link chega ao app que já está aberto
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
@@ -313,7 +313,7 @@ pub fn run() {
             setup::finish_setup,
         ])
         .build(tauri::generate_context!())
-        .expect("erro ao iniciar o Machen Craft")
+        .expect("erro ao iniciar o Machenia")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
                 // Sem janelas visíveis o app continua vivo na bandeja.

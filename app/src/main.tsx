@@ -6,6 +6,10 @@ import "./styles.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { temaInicial } from "./lib/theme";
+
+// aplica o tema antes do primeiro quadro (no useEffect a tela abria no tema errado e piscava)
+document.documentElement.dataset.theme = temaInicial();
 
 async function start() {
   // Só no `npm run dev`: ?mock=livre|aberto|preparando|host|assistente simula o núcleo.

@@ -198,7 +198,7 @@ function WorldNumbersCard({ worldName }: { worldName: string }) {
       `${worldName} em números ⛏️`,
       ...items.map(([l, v]) => `• ${v} ${l}`),
       top ? `Quem mais jogou: ${top.nick} (${fmt(top.horas_jogadas)} h)` : "",
-      "Feito com o Machen Craft",
+      "Feito com o Machenia",
     ]
       .filter(Boolean)
       .join("\n");

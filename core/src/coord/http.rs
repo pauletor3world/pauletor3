@@ -60,7 +60,7 @@ pub enum Body<'a> {
 impl ApiClient {
     pub fn new(base: &str, world_id: &str, secret: [u8; 32]) -> NmResult<Self> {
         let http = reqwest::Client::builder()
-            .user_agent(concat!("MachenCraft/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Machenia/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
             .build()

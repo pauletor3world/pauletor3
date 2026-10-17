@@ -1,12 +1,12 @@
 [package]
-name = "machencraft-core"
-description = "Núcleo do Machen Craft: sincronização, trava de host, servidor e sessão"
+name = "machenia-core"
+description = "Núcleo do Machenia: sincronização, trava de host, servidor e sessão"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "machencraft_core"
+name = "machenia_core"
 path = "src/lib.rs"
 
 [features]
@@ -15,8 +15,8 @@ default = []
 personal = []
 
 [[bin]]
-name = "machencraft-cli"
-path = "src/bin/machencraft-cli.rs"
+name = "machenia-cli"
+path = "src/bin/machenia-cli.rs"
 
 [dependencies]
 anyhow = "1"

@@ -57,7 +57,7 @@ jobs:
         with:
           projectPath: app
           tagName: ${{ github.ref_name }}
-          releaseName: "Machen Craft ${{ github.ref_name }}"
+          releaseName: "Machenia ${{ github.ref_name }}"
           releaseBody: ${{ steps.notas.outputs.body }}
           releaseDraft: true
           prerelease: false

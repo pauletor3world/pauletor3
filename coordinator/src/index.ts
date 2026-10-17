@@ -1,4 +1,4 @@
-// Coordenação do Machen Craft (Cloudflare Worker). Contrato em ../docs/api.md.
+// Coordenação do Machenia (Cloudflare Worker). Contrato em ../docs/api.md.
 //
 // GET  /health                                  saúde
 // GET  /c/:token                                página do convite (link que o amigo abre)
@@ -79,7 +79,7 @@ export default {
 async function route(req: Request, env: Env, url: URL): Promise<Response> {
   const p = url.pathname;
   if (p === "/health") return json({ ok: true, storage: env.STORAGE ?? "do" });
-  if (p === "/" ) return new Response("Machen Craft — coordenação", { headers: { "content-type": "text/plain; charset=utf-8" } });
+  if (p === "/" ) return new Response("Machenia — coordenação", { headers: { "content-type": "text/plain; charset=utf-8" } });
 
   // página do convite
   let m = /^\/c\/([a-z0-9]{6,32})\.([a-z0-9]{8,64})$/.exec(p);

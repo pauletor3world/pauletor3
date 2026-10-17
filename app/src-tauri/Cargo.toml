@@ -1,28 +1,28 @@
 [package]
-name = "machencraft-app"
-description = "Machen Craft — o mundo de Minecraft da turma, hospedado por turnos"
+name = "machenia-app"
+description = "Machenia — o mundo de Minecraft da turma, hospedado por turnos"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "machencraft_app_lib"
+name = "machenia_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "machen-craft"
+name = "machenia"
 path = "src/main.rs"
 
 [features]
 default = []
 # Build pessoal (modo offline do servidor). Nunca distribuído.
-personal = ["machencraft-core/personal"]
+personal = ["machenia-core/personal"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-machencraft-core = { path = "../../core" }
+machenia-core = { path = "../../core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"

@@ -89,18 +89,19 @@ impl Paths {
 }
 
 /// Nome das pastas do app (perfil do usuário e pasta de dados sugerida).
-pub const DIR_NAME: &str = "MachenCraft";
-/// Nome antigo (até a 2.0.3, quando o app se chamava pAuletOr 3). Migrado sozinho.
-const LEGACY_DIR_NAME: &str = "pAuletOr3";
+pub const DIR_NAME: &str = "Machenia";
+/// Nomes antigos: "pAuletOr3" (até a 2.0.3) e "MachenCraft" (até a 2.1.x). Migrados sozinhos.
+const LEGACY_DIR_NAMES: [&str; 2] = ["MachenCraft", "pAuletOr3"];
 
-/// Arquivo minúsculo em `%APPDATA%\MachenCraft\location.json` que diz onde está a pasta de dados.
+/// Arquivo minúsculo em `%APPDATA%\Machenia\location.json` que diz onde está a pasta de dados.
 /// Fica sempre no perfil do usuário; os dados pesados ficam onde ele escolher.
 pub fn location_file() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(DIR_NAME).join("location.json"))
 }
 
-fn legacy_location_file() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join(LEGACY_DIR_NAME).join("location.json"))
+fn legacy_location_files() -> Vec<PathBuf> {
+    let Some(a) = std::env::var_os("APPDATA") else { return Vec::new() };
+    LEGACY_DIR_NAMES.iter().map(|n| PathBuf::from(&a).join(n).join("location.json")).collect()
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -113,35 +114,34 @@ fn read_location(f: &Path) -> Option<PathBuf> {
     Some(loc.data_dir)
 }
 
-/// Pasta de dados: `MACHENCRAFT_HOME`, senão o que estiver em `location.json`.
-/// Na primeira abertura depois da troca de nome, adota o `location.json` antigo e
-/// renomeia a pasta `pAuletOr3` para `MachenCraft` (se nada estiver usando a pasta).
+/// Pasta de dados: `MACHENIA_HOME`, senão o que estiver em `location.json`.
+/// Na primeira abertura depois de uma troca de nome, adota o `location.json` antigo e
+/// renomeia a pasta (`MachenCraft` ou `pAuletOr3`) para `Machenia` (se nada estiver usando a pasta).
 pub fn resolve_data_dir() -> Option<PathBuf> {
-    if let Some(h) = std::env::var_os("MACHENCRAFT_HOME") {
+    if let Some(h) = std::env::var_os("MACHENIA_HOME") {
         return Some(PathBuf::from(h));
     }
     let (dir, legacy) = match read_location(&location_file()?) {
-        Some(d) => (d, false),
-        None => (read_location(&legacy_location_file()?)?, true),
+        Some(d) => (d, None),
+        None => legacy_location_files().into_iter().find_map(|f| read_location(&f).map(|d| (d, Some(f))))?,
     };
     let migrated = migrate_legacy_root(&dir);
-    let saved = (legacy || migrated != dir) && save_data_dir(&migrated).is_ok();
-    if saved && legacy {
-        if let Some(old) = legacy_location_file() {
-            let _ = std::fs::remove_file(&old);
-            if let Some(parent) = old.parent() {
-                let _ = std::fs::remove_dir(parent); // só some se estiver vazia
-            }
+    let saved = (legacy.is_some() || migrated != dir) && save_data_dir(&migrated).is_ok();
+    if let (true, Some(old)) = (saved, legacy) {
+        let _ = std::fs::remove_file(&old);
+        if let Some(parent) = old.parent() {
+            let _ = std::fs::remove_dir(parent); // só some se estiver vazia
         }
     }
     Some(migrated)
 }
 
-/// `...\pAuletOr3` vira `...\MachenCraft`. Um rename na mesma unidade é instantâneo e
-/// atômico; se algo estiver com arquivos abertos lá dentro (ou o destino já existir),
-/// fica tudo como está e tenta de novo na próxima abertura.
+/// `...\MachenCraft` (ou `...\pAuletOr3`) vira `...\Machenia`. Um rename na mesma unidade é
+/// instantâneo e atômico; se algo estiver com arquivos abertos lá dentro (ou o destino já
+/// existir), fica tudo como está e tenta de novo na próxima abertura.
 fn migrate_legacy_root(dir: &Path) -> PathBuf {
-    if dir.file_name().and_then(|n| n.to_str()) != Some(LEGACY_DIR_NAME) {
+    let legacy = dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| LEGACY_DIR_NAMES.contains(&n));
+    if !legacy {
         return dir.to_path_buf();
     }
     let new = dir.with_file_name(DIR_NAME);
@@ -184,8 +184,13 @@ mod tests {
         let old = t.path().join("pAuletOr3");
         std::fs::create_dir_all(old.join("server")).unwrap();
         let got = migrate_legacy_root(&old);
-        assert_eq!(got, t.path().join("MachenCraft"));
+        assert_eq!(got, t.path().join("Machenia"));
         assert!(got.join("server").is_dir() && !old.exists());
+        // o nome da 2.1 também
+        std::fs::remove_dir_all(&got).unwrap();
+        let mc = t.path().join("MachenCraft");
+        std::fs::create_dir_all(&mc).unwrap();
+        assert_eq!(migrate_legacy_root(&mc), t.path().join("Machenia"));
         // outro nome qualquer fica como está
         let other = t.path().join("Jogos");
         assert_eq!(migrate_legacy_root(&other), other);

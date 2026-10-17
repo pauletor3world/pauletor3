@@ -287,7 +287,7 @@ describe("distribuição do app pelo Worker", () => {
     expect(page).toContain(`/d/${inv.token}`);
     const dl = await worker.fetch(new Request(`${BASE}/d/${inv.token}`));
     expect(dl.status).toBe(200);
-    expect(dl.headers.get("content-disposition")).toContain("MachenCraft-2.0.0-setup.exe");
+    expect(dl.headers.get("content-disposition")).toContain("Machenia-2.0.0-setup.exe");
     expect((await dl.arrayBuffer()).byteLength).toBe(exe.length);
     expect((await worker.fetch(new Request(`${BASE}/d/${world_id}.naovalenada`))).status).toBe(403);
 

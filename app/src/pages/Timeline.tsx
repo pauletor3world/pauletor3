@@ -1,4 +1,4 @@
-import { ArrowRightLeft, Award, ChevronDown, ChevronRight, Copy, DoorOpen, History, LogIn, LogOut, RotateCcw, Save, Skull, Sparkles } from "lucide-react";
+import { ArrowRightLeft, Award, ChevronDown, Copy, DoorOpen, History, LogIn, LogOut, RotateCcw, Save, Skull, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Avatar } from "../components/Avatar";
 import { Button, Card, Empty, ErrorBanner, InfoNote, Modal, PageHeader, Pill, cx, inputCls } from "../components/ui";
@@ -230,6 +230,17 @@ function sessions(events: DiaryEvent[]): DiarySession[] {
   return out.reverse();
 }
 
+/** "Hoje", "Ontem" ou a data por extenso. */
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Hoje";
+  if (d.toDateString() === yesterday.toDateString()) return "Ontem";
+  return dateLong(iso);
+}
+
 function DiaryFeed() {
   const [events, setEvents] = useState<DiaryEvent[] | null>(null);
   const [who, setWho] = useState("");
@@ -240,32 +251,46 @@ function DiaryFeed() {
     run("diary", () => api.diary(300)).then((e) => e && setEvents(e));
   }, [run]);
   const people = useMemo(() => [...new Set((events ?? []).map((e) => e.player).filter((p): p is string => !!p))].sort(), [events]);
-  const list = useMemo(() => {
+  const days = useMemo(() => {
     const t = TYPES.find((x) => x.id === type) ?? TYPES[0];
-    return sessions(events ?? [])
+    const list = sessions(events ?? [])
       .map((s) => ({ ...s, shown: s.events.filter((e) => t.match(e.kind) && (!who || e.player === who)) }))
       .filter((s) => s.shown.length > 0);
+    const map = new Map<string, typeof list>();
+    for (const s of list) {
+      const k = new Date(s.start).toDateString();
+      map.set(k, [...(map.get(k) ?? []), s]);
+    }
+    return [...map.values()];
   }, [events, who, type]);
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {events && events.length > 0 && (
-        <div className="flex gap-2 flex-wrap">
-          <select className={cx(inputCls, "max-w-[220px]")} value={who} onChange={(e) => setWho(e.target.value)} aria-label="Filtrar por pessoa">
-            <option value="">Todo mundo</option>
-            {people.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-          <select className={cx(inputCls, "max-w-[220px]")} value={type} onChange={(e) => setType(e.target.value)} aria-label="Filtrar por tipo">
-            {TYPES.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.label}
-              </option>
-            ))}
-          </select>
+        <div className="flex items-center gap-2 flex-wrap">
+          {TYPES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setType(t.id)}
+              aria-pressed={type === t.id}
+              className={cx(
+                "h-8 px-3.5 rounded-full text-[12.5px] font-semibold cursor-pointer transition-colors ring-1 ring-inset",
+                type === t.id ? "bg-sun-400/14 text-sun-300 ring-sun-400/30" : "text-ink-muted ring-white/[0.08] hover:text-ink hover:bg-white/[0.04]",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+          {people.length > 1 && (
+            <select className={cx(inputCls, "ml-auto h-8 py-0 max-w-[180px] text-[12.5px]")} value={who} onChange={(e) => setWho(e.target.value)} aria-label="Filtrar por pessoa">
+              <option value="">Todo mundo</option>
+              {people.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
       {events === null && !error && <div className="h-40 rounded-2xl bg-night-850/60 animate-pulse" />}
@@ -276,47 +301,82 @@ function DiaryFeed() {
           </Empty>
         </Card>
       )}
-      {events && events.length > 0 && list.length === 0 && (
+      {events && events.length > 0 && days.length === 0 && (
         <Card>
           <Empty icon={<Sparkles className="size-6" />} title="Nada com esse filtro" />
         </Card>
       )}
-      {list.map((s) => {
-        const mins = (new Date(s.end).getTime() - new Date(s.start).getTime()) / 1000;
-        const highlights = s.shown.filter((e) => HIGHLIGHT.has(e.kind));
-        const expanded = !!open[s.start];
-        return (
-          <Card key={s.start}>
-            <button
-              onClick={() => setOpen((o) => ({ ...o, [s.start]: !o[s.start] }))}
-              aria-expanded={expanded}
-              className="w-full text-left px-5 pt-4 pb-3 flex items-center gap-3 cursor-pointer"
-            >
-              {expanded ? <ChevronDown className="size-4 text-ink-faint shrink-0" /> : <ChevronRight className="size-4 text-ink-faint shrink-0" />}
-              <div className="min-w-0 flex-1">
-                <div className="font-bold text-[14px] first-letter:uppercase">
-                  {dateLong(s.start)} · {clock(s.start)} às {clock(s.end)}
+      {days.map((list) => (
+        <section key={list[0].start}>
+          <h2 className="flex items-baseline gap-2 mb-2.5 ml-1">
+            <span className="text-[14px] font-bold text-ink first-letter:uppercase">{dayLabel(list[0].start)}</span>
+            <span className="text-[12px] text-ink-faint">
+              {list.length} {list.length === 1 ? "sessão" : "sessões"}
+            </span>
+          </h2>
+          <Card className="divide-y divide-white/[0.05] overflow-hidden">
+            {list.map((s) => {
+              const secs = (new Date(s.end).getTime() - new Date(s.start).getTime()) / 1000;
+              const deaths = s.events.filter((e) => e.kind === "death").length;
+              const advs = s.events.filter((e) => e.kind === "advancement").length;
+              // com filtro escolhido, a sessão já abre mostrando o que foi filtrado
+              const expanded = open[s.start] ?? type !== "all";
+              return (
+                <div key={s.start}>
+                  <button
+                    onClick={() => setOpen((o) => ({ ...o, [s.start]: !expanded }))}
+                    aria-expanded={expanded}
+                    className="w-full text-left px-5 py-3.5 flex items-center gap-4 cursor-pointer hover:bg-white/[0.025] transition-colors"
+                  >
+                    <div className="w-[52px] shrink-0 tabular-nums leading-tight">
+                      <div className="text-[14px] font-bold text-ink">{clock(s.start)}</div>
+                      <div className="text-[11.5px] text-ink-faint">{clock(s.end)}</div>
+                    </div>
+                    <div className="flex -space-x-2 shrink-0">
+                      {(s.players.length ? s.players : ["?"]).slice(0, 3).map((p) => (
+                        <Avatar key={p} name={p} size={30} className="ring-2 ring-night-850 rounded-[8px]" />
+                      ))}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold text-[14px] truncate">{s.players.length ? s.players.join(", ") : "Ninguém entrou"}</div>
+                      <div className="text-[12.5px] text-ink-muted">Jogaram {duration(secs)}</div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {deaths > 0 && (
+                        <Pill tone="ember">
+                          <Skull className="size-3.5" /> {deaths}
+                        </Pill>
+                      )}
+                      {advs > 0 && (
+                        <Pill tone="sun">
+                          <Award className="size-3.5" /> {advs}
+                        </Pill>
+                      )}
+                      {s.hostChanges > 0 && (
+                        <Pill tone="sky">
+                          <ArrowRightLeft className="size-3.5" /> {s.hostChanges}
+                        </Pill>
+                      )}
+                    </div>
+                    <ChevronDown className={cx("size-4 text-ink-faint shrink-0 transition-transform", !expanded && "-rotate-90")} />
+                  </button>
+                  {expanded && (
+                    <ul className="ml-[88px] mr-5 mb-4 border-l border-white/[0.08] pl-4">
+                      {s.shown.map((e, i) => (
+                        <li key={i} className="flex items-start gap-3 py-1.5">
+                          <span className="mt-0.5 shrink-0">{diaryIcon[e.kind] ?? <Sparkles className="size-4 text-ink-muted" />}</span>
+                          <span className={cx("flex-1 text-[13.5px]", HIGHLIGHT.has(e.kind) ? "text-ink" : "text-ink-muted")}>{e.text}</span>
+                          <span className="text-[11.5px] text-ink-faint tabular-nums">{clock(e.at)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
-                <div className="text-[12.5px] text-ink-muted">
-                  {s.players.length ? s.players.join(" e ") : "Ninguém"}
-                  {mins >= 60 && ` · ${duration(mins)}`}
-                  {s.hostChanges > 0 && ` · ${s.hostChanges} ${s.hostChanges === 1 ? "troca" : "trocas"} de host`}
-                </div>
-              </div>
-            </button>
-            <ul className="px-5 pb-4">
-              {(expanded ? s.shown : highlights.slice(0, 4)).map((e, i) => (
-                <li key={i} className={cx("flex items-start gap-3 py-1.5", !HIGHLIGHT.has(e.kind) && "opacity-70")}>
-                  <span className="mt-0.5 shrink-0">{diaryIcon[e.kind] ?? <Sparkles className="size-4 text-ink-muted" />}</span>
-                  <span className={cx("flex-1 text-[13.5px]", HIGHLIGHT.has(e.kind) ? "text-ink" : "text-ink-soft")}>{e.text}</span>
-                  <span className="text-[11.5px] text-ink-faint tabular-nums">{clock(e.at)}</span>
-                </li>
-              ))}
-              {!expanded && highlights.length === 0 && <li className="text-[12.5px] text-ink-faint py-1">Sessão tranquila. Abra para ver tudo.</li>}
-            </ul>
+              );
+            })}
           </Card>
-        );
-      })}
+        </section>
+      ))}
     </div>
   );
 }

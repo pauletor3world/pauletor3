@@ -61,7 +61,7 @@ export default function Logs({ status, toast }: { status: Status | null; toast: 
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-92px)]">
+    <div className="flex flex-col h-[calc(100vh-76px)]">
       <PageHeader
         title="Console do servidor"
         subtitle={status?.me_hosting ? "Ao vivo" : "Mostra o console quando este PC está hospedando."}

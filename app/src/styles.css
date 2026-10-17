@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
- * Identidade do Machen Craft. Toda cor sai da cena em pixel art (identidade/):
+ * Identidade do Machenia. Toda cor sai da cena em pixel art (identidade/):
  * o céu noturno, o pôr do sol pêssego, a luz da janela da casa, a grama e o telhado.
  * Luz da janela (sun) = ação. Grama (moss) = no ar / tudo certo. Céu (sky) = trabalhando.
  * Pêssego (dusk) = atenção. Telhado (ember) = problema.
@@ -174,9 +174,14 @@ body {
 }
 
 /* Rolagem fina e discreta. */
+/* barra de rolagem só aparece quando o mouse está sobre a área (e só se o conteúdo não couber) */
 .scroll {
   overflow: auto;
   scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s;
+}
+.scroll:hover {
   scrollbar-color: var(--color-night-600) transparent;
 }
 
@@ -207,6 +212,49 @@ body {
   background-image: repeating-linear-gradient(90deg, transparent 0 7px, rgb(6 12 27 / 0.55) 7px 9px);
 }
 
+/* ---------------------------------------------------------------- logo da barra lateral */
+
+/* Mundo fechado: noite. Ao abrir, o dia sobe de baixo como um amanhecer, com um brilho
+   e um pulinho da logo; ao fechar, volta a escurecer devagar. */
+.brand-day {
+  clip-path: inset(100% 0 0 0 round 22%);
+  opacity: 0;
+  transition: clip-path 0.9s var(--ease-out-expo), opacity 0.6s ease;
+}
+.brand-open .brand-day {
+  clip-path: inset(0 0 0 0 round 22%);
+  opacity: 1;
+}
+.brand-logo::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 30%;
+  background: radial-gradient(closest-side, rgb(255 200 120 / 0.55), transparent);
+  opacity: 0;
+  pointer-events: none;
+}
+.brand-open {
+  animation: brand-rise 0.9s var(--ease-out-expo);
+}
+.brand-open::after {
+  animation: brand-glow 1.6s ease-out;
+}
+@keyframes brand-rise {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.12) rotate(-3deg); }
+  100% { transform: scale(1); }
+}
+@keyframes brand-glow {
+  0% { opacity: 0; }
+  30% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-day { transition: opacity 0.3s ease; clip-path: none; }
+  .brand-open, .brand-open::after { animation: none; }
+}
+
 /* ---------------------------------------------------------------- cena do início */
 
 .scene {
@@ -221,120 +269,43 @@ body {
   transform: translateY(-18%);
 }
 .scene-art > img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   image-rendering: pixelated;
 }
-.scene-enter .scene-art > img {
+.scene-enter .scene-art {
   animation: scene-in 1.1s var(--ease-out-expo) both;
 }
 .scene-enter .scene-copy {
   animation: pop 0.7s var(--ease-out-expo) 0.25s both;
 }
 @keyframes scene-in {
-  from { opacity: 0; filter: blur(8px) saturate(0.6); transform: scale(1.04); }
-  to { opacity: 1; filter: none; transform: none; }
+  from { opacity: 0; filter: blur(8px) saturate(0.6); transform: translateY(-18%) scale(1.04); }
+  to { opacity: 1; filter: none; transform: translateY(-18%); }
 }
 
 /* Clima da cena: noite (mundo dormindo), amanhecer (abrindo/trocando), dia (aberto). */
+.scene-day-art {
+  opacity: 0;
+  transition: opacity 1.4s ease;
+}
+.scene-day .scene-day-art {
+  opacity: 1;
+}
 .scene-tint {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  transition: background-color 1.2s ease, opacity 1.2s ease;
-}
-.scene-art > img {
-  transition: filter 1.2s ease;
-}
-.scene-night .scene-art > img {
-  filter: brightness(0.62) saturate(0.7);
-}
-.scene-night .scene-tint {
-  background: rgb(24 36 96 / 0.55);
-  mix-blend-mode: multiply;
+  opacity: 0;
+  background: rgb(255 150 120 / 0.14);
+  mix-blend-mode: screen;
+  transition: opacity 1.2s ease;
 }
 .scene-dawn .scene-tint {
-  background: rgb(255 150 120 / 0.1);
-  mix-blend-mode: screen;
-}
-.scene-day .scene-art > img {
-  filter: brightness(1.08) saturate(1.08);
-}
-.scene-day .scene-tint {
-  background: linear-gradient(180deg, rgb(120 190 255 / 0.55) 0%, rgb(160 210 255 / 0.25) 45%, transparent 70%);
-  mix-blend-mode: soft-light;
-}
-/* Fumaça na chaminé: um amigo está com o mundo aberto. */
-.scene-smoke {
-  position: absolute;
-  left: 51.2%;
-  top: 63.6%;
-  width: 1%;
-  height: 1%;
-}
-.scene-smoke i {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 0.55vw;
-  height: 0.55vw;
-  min-width: 5px;
-  min-height: 5px;
-  background: rgb(235 238 245 / 0.85);
-  animation: smoke 3.6s steps(9, end) infinite;
-}
-.scene-smoke i:nth-child(2) { animation-delay: -1.2s; }
-.scene-smoke i:nth-child(3) { animation-delay: -2.4s; }
-@keyframes smoke {
-  0% { transform: translate(0, 0) scale(1); opacity: 0.9; }
-  100% { transform: translate(14px, -46px) scale(1.9); opacity: 0; }
-}
-
-/* Janelas da casa (posições exatas, em % da arte 1920x1080). */
-.scene-window {
-  position: absolute;
-  background: #3b291b;
-  transition: background-color 0.6s ease;
-}
-.scene-window.w1 { left: 47.8125%; top: 69.4444%; width: 0.9375%; height: 2.2222%; }
-.scene-window.w2 { left: 50%; top: 69.4444%; width: 0.9375%; height: 2.2222%; }
-.scene-window.w3 { left: 53.75%; top: 71.1111%; width: 0.625%; height: 1.6667%; }
-.scene-lit .scene-window {
-  background: #ffd278;
-}
-.scene-busy .scene-window {
-  background: #ffd278;
-  animation: flicker 2.4s steps(1, end) infinite;
-}
-.scene-busy .scene-window.w2 { animation-delay: -0.8s; }
-.scene-busy .scene-window.w3 { animation-delay: -1.6s; }
-@keyframes flicker {
-  0%, 100% { background: #ffd278; }
-  40% { background: #3b291b; }
-  55% { background: #ffd278; }
-  80% { background: #c98f4a; }
-}
-/* O brilho que a luz da casa joga na noite. */
-.scene-glow {
-  position: absolute;
-  left: 42%;
-  top: 60%;
-  width: 17%;
-  height: 21%;
-  border-radius: 50%;
-  background: radial-gradient(closest-side, rgb(255 214 130 / 0.95), rgb(255 186 96 / 0.42) 38%, rgb(255 170 80 / 0.12) 68%, transparent);
-  mix-blend-mode: screen;
-  opacity: 0;
-  transition: opacity 0.9s ease;
-  pointer-events: none;
-}
-.scene-lit .scene-glow {
   opacity: 1;
-  animation: breathe 4s ease-in-out infinite;
-}
-.scene-busy .scene-glow {
-  opacity: 0.5;
 }
 
 button:focus-visible,

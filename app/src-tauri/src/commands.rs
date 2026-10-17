@@ -2,19 +2,19 @@
 
 use std::sync::Arc;
 
-use machencraft_core::config::Config;
-use machencraft_core::coord::{DiaryEvent, Invite, PrivateSettings};
-use machencraft_core::error::HumanError;
-use machencraft_core::health::{self, Check};
-use machencraft_core::journal::{Category, JournalSettings, JournalStatus};
-use machencraft_core::launcher::{self, LauncherCandidate};
-use machencraft_core::manifest::ManifestSummary;
-use machencraft_core::players::{Migration, WorldPlayer};
-use machencraft_core::retention::GcReport;
-use machencraft_core::session::{EndReason, Engine, Status};
-use machencraft_core::stats::Stats;
-use machencraft_core::versions::WorldSettings;
-use machencraft_core::{serversdat, NmError};
+use machenia_core::config::Config;
+use machenia_core::coord::{DiaryEvent, Invite, PrivateSettings};
+use machenia_core::error::HumanError;
+use machenia_core::health::{self, Check};
+use machenia_core::journal::{Category, JournalSettings, JournalStatus};
+use machenia_core::launcher::{self, LauncherCandidate};
+use machenia_core::manifest::ManifestSummary;
+use machenia_core::players::{Migration, WorldPlayer};
+use machenia_core::retention::GcReport;
+use machenia_core::session::{EndReason, Engine, Status};
+use machenia_core::stats::Stats;
+use machenia_core::versions::WorldSettings;
+use machenia_core::{serversdat, NmError};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -84,7 +84,7 @@ pub async fn app_info(state: State<'_, AppState>) -> CmdResult<AppInfo> {
         None => (false, false, None),
     };
     Ok(AppInfo {
-        version: machencraft_core::APP_VERSION.into(),
+        version: machenia_core::APP_VERSION.into(),
         configured,
         has_engine: e.is_some(),
         data_dir: dir,
@@ -208,7 +208,7 @@ pub async fn diagnostics(state: State<'_, AppState>) -> CmdResult<String> {
     let e = engine(&state)?;
     let _ = e.refresh().await;
     let checks = health::run(&e).await;
-    Ok(machencraft_core::diagnostics::report(&e, &checks).await)
+    Ok(machenia_core::diagnostics::report(&e, &checks).await)
 }
 
 /// Configurações sem segredos (só diz se cada segredo existe).
@@ -231,17 +231,17 @@ pub async fn get_settings(state: State<'_, AppState>) -> CmdResult<SettingsView>
     let e = engine(&state)?;
     let c = e.config.read().await.clone();
     let s = e.secrets().await;
-    let total = machencraft_core::heap::total_ram_mb();
+    let total = machenia_core::heap::total_ram_mb();
     Ok(SettingsView {
         journal_categories: Category::ALL.iter().map(|k| (*k, k.label().to_string(), c.journal.is_on(*k))).collect(),
         config: c,
         has_admin_token: s.admin_token.is_some(),
         data_dir: e.paths.root.display().to_string(),
-        build: if machencraft_core::OFFLINE_MODE { "pessoal" } else { "padrão" },
-        auto_heap_mb: machencraft_core::heap::auto_heap_mb(total),
+        build: if machenia_core::OFFLINE_MODE { "pessoal" } else { "padrão" },
+        auto_heap_mb: machenia_core::heap::auto_heap_mb(total),
         total_ram_mb: total,
-        direct_launch_available: machencraft_core::OFFLINE_MODE,
-        auto_client_heap_mb: machencraft_core::heap::auto_client_heap_mb(total, None),
+        direct_launch_available: machenia_core::OFFLINE_MODE,
+        auto_client_heap_mb: machenia_core::heap::auto_client_heap_mb(total, None),
     })
 }
 
@@ -271,11 +271,11 @@ pub struct SettingsPatch {
 /// Versões do Minecraft que dá para abrir direto: o vanilla do app e as da .minecraft que são
 /// da versão do mundo (OptiFine, Fabric, Quilt).
 #[tauri::command]
-pub async fn client_versions(state: State<'_, AppState>) -> CmdResult<Vec<machencraft_core::instancias::ClientVersion>> {
+pub async fn client_versions(state: State<'_, AppState>) -> CmdResult<Vec<machenia_core::instancias::ClientVersion>> {
     let e = engine(&state)?;
     let mc = e.config.read().await.minecraft_dir.clone();
     let minecraft = e.world_minecraft_version().await;
-    Ok(machencraft_core::instancias::list(mc.as_deref(), &minecraft))
+    Ok(machenia_core::instancias::list(mc.as_deref(), &minecraft))
 }
 
 /// "Restaurar como cópia": a versão vira um mundo de single-player.
@@ -286,7 +286,7 @@ pub async fn restore_copy(state: State<'_, AppState>, manifest_id: String) -> Cm
 
 /// "Nosso Mundo em números" (estatísticas do próprio Minecraft).
 #[tauri::command]
-pub async fn world_numbers(state: State<'_, AppState>) -> CmdResult<machencraft_core::numeros::Numeros> {
+pub async fn world_numbers(state: State<'_, AppState>) -> CmdResult<machenia_core::numeros::Numeros> {
     Ok(engine(&state)?.numeros())
 }
 
@@ -478,7 +478,7 @@ pub async fn test_webhook(state: State<'_, AppState>, url: Option<String>) -> Cm
         None => e.private_settings().await?.discord_webhook.ok_or_else(|| CmdError::msg("Sem webhook", "Cole a URL do webhook primeiro."))?,
     };
     let world = e.status().world_name;
-    machencraft_core::journal::send_test(&url, &world).await.map_err(|m| CmdError::msg("O teste não chegou ao Discord", m))
+    machenia_core::journal::send_test(&url, &world).await.map_err(|m| CmdError::msg("O teste não chegou ao Discord", m))
 }
 
 #[tauri::command]

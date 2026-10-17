@@ -21,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { humanState } from "../lib/format";
+import { heldLease, humanState } from "../lib/format";
 import type { Toast } from "../lib/hooks";
 import type { Status } from "../lib/types";
 import { Avatar } from "./Avatar";
@@ -69,12 +69,15 @@ function WinBtn({ children, onClick, label, danger }: { children: ReactNode; onC
   );
 }
 
-/** Logo + nome, no topo da barra lateral e do assistente. */
-export function Brand({ className }: { className?: string }) {
+/** Logo + nome, no topo da barra lateral e do assistente. Com o mundo aberto, a logo amanhece. */
+export function Brand({ className, open = false }: { className?: string; open?: boolean }) {
   return (
     <div data-tauri-drag-region className={cx("flex items-center gap-3", className)}>
-      <img src="/logo.png" alt="" className="size-9 pointer-events-none" draggable={false} />
-      <span className="font-display text-[27px] leading-none text-ink pointer-events-none">Machen Craft</span>
+      <span className={cx("brand-logo relative size-9 shrink-0 pointer-events-none", open && "brand-open")} title={open ? "Mundo aberto" : "Mundo fechado"}>
+        <img src="/logo.png" alt="" className="absolute inset-0 size-full" draggable={false} />
+        <img src="/logo-dia.png" alt="" className="brand-day absolute inset-0 size-full" draggable={false} />
+      </span>
+      <span className="text-[20px] font-bold tracking-[-0.015em] leading-none text-ink pointer-events-none">Machenia</span>
     </div>
   );
 }
@@ -186,7 +189,7 @@ export function Sidebar({
   return (
     <nav className="w-[232px] shrink-0 flex flex-col bg-night-950/45 border-r border-white/[0.05]">
       <div data-tauri-drag-region className="px-5 pt-5 pb-5">
-        <Brand />
+        <Brand open={!!status && (status.me_hosting || heldLease(status.lease)?.purpose === "hosting")} />
       </div>
 
       {/* seletor de mundos (hoje um; pronto para os planos com mais mundos) */}

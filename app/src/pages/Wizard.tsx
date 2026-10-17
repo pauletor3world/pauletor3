@@ -42,7 +42,7 @@ const META: Record<StepId, { title: string; icon: ReactNode }> = {
   done: { title: "Pronto", icon: <Check className="size-4" /> },
 };
 
-const looksLikeInvite = (s: string) => /^(P3J1\.|(machencraft|pauletor3):\/\/entrar\/|https?:\/\/\S+\/c\/[a-z0-9]+\.[a-z0-9]+#)/.test(s.trim());
+const looksLikeInvite = (s: string) => /^(P3J1\.|(machenia|machencraft|pauletor3):\/\/entrar\/|https?:\/\/\S+\/c\/[a-z0-9]+\.[a-z0-9]+#)/.test(s.trim());
 
 export default function Wizard({ onDone }: { onDone: () => void }) {
   const [role, setRole] = useState<Role>("friend");
@@ -245,7 +245,7 @@ function PcStep({ next, back }: { next: () => void; back: () => void }) {
               icon={<FolderOpen className="size-4" />}
               onClick={async () => {
                 const f = await open({ directory: true, defaultPath: dir || undefined });
-                if (typeof f === "string") setDir(/\\(MachenCraft|pAuletOr3)$/i.test(f) ? f : `${f}\\MachenCraft`);
+                if (typeof f === "string") setDir(/\\(Machenia|MachenCraft|pAuletOr3)$/i.test(f) ? f : `${f}\\Machenia`);
               }}
             >
               Trocar

@@ -2,8 +2,8 @@
 
 use std::sync::Mutex;
 
-use machencraft_core::coord::LeaseStatus;
-use machencraft_core::session::{Phase, Status};
+use machenia_core::coord::LeaseStatus;
+use machenia_core::session::{Phase, Status};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -30,13 +30,13 @@ fn icon(kind: &str) -> Image<'static> {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let play = MenuItem::with_id(app, "play", "Jogar", true, None::<&str>)?;
     let pass = MenuItem::with_id(app, "pass", "Passar o host", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Abrir o Machen Craft", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Abrir o Machenia", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&play, &pass, &open, &sep, &quit])?;
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon("idle"))
-        .tooltip("Machen Craft")
+        .tooltip("Machenia")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -111,7 +111,7 @@ pub fn update(app: &AppHandle, st: &Status) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let kind: &'static str = if st.last_error.is_some() || st.recovery_pending {
         "problem"
-    } else if st.me_hosting || matches!(&st.lease, Some(LeaseStatus::Held { lease }) if lease.purpose == machencraft_core::coord::LeasePurpose::Hosting) {
+    } else if st.me_hosting || matches!(&st.lease, Some(LeaseStatus::Held { lease }) if lease.purpose == machenia_core::coord::LeasePurpose::Hosting) {
         // mundo aberto (aqui ou no PC de um amigo): ícone aceso
         "hosting"
     } else if !matches!(st.phase, Phase::Idle) {
@@ -126,7 +126,7 @@ pub fn update(app: &AppHandle, st: &Status) {
             *last = kind;
         }
     }
-    let _ = tray.set_tooltip(Some(format!("Machen Craft — {}", describe(st))));
+    let _ = tray.set_tooltip(Some(format!("Machenia — {}", describe(st))));
     let idle = matches!(st.phase, Phase::Idle);
     let (play_text, play_on) = match &st.lease {
         _ if st.me_hosting => ("Abrir o Minecraft", true),

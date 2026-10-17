@@ -74,16 +74,6 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   }, [status?.playing, entrou]);
   const { busy, error, setError, run } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
-  // assistente de migração: aparece só quando há progresso sem dono para vincular (dono)
-  const [orphans, setOrphans] = useState(0);
-  const isOwner = !!status?.is_owner;
-  useEffect(() => {
-    if (!isOwner) return;
-    api
-      .worldPlayers()
-      .then((ps) => setOrphans(ps.filter((p) => !p.nick).length))
-      .catch(() => {});
-  }, [isOwner]);
   const [enter] = useState(() => !sceneShown);
   useEffect(() => {
     sceneShown = true;
@@ -92,7 +82,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   if (!status) {
     return (
       <div className="space-y-6">
-        <Scene enter={enter} lights="off" mood="night">
+        <Scene enter={enter} mood="night">
           <div className="h-full flex items-end p-8">
             <Loader2 className="size-5 animate-spin text-ink-soft" />
           </div>
@@ -171,7 +161,6 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   const prep = status.client_prep;
   const prepPct = prep ? (prep.bytes_total > 0 ? Math.min(100, (prep.bytes_done / prep.bytes_total) * 100) : 0) : 0;
   const strip = working || !!prep;
-  const lights = st.tone === "live" ? "on" : st.tone === "busy" ? "busy" : "off";
   // a cena conta o estado: noite (dormindo), amanhecer (abrindo/trocando), dia (aberto)
   const opening = working || !!status.failover || !!held?.handing_over;
   const mood: "night" | "dawn" | "day" = opening ? "dawn" : status.me_hosting || held?.purpose === "hosting" ? "day" : "night";
@@ -190,7 +179,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   return (
     <div className="space-y-6">
       {/* ---------------------------------------------------------------- a cena */}
-      <Scene enter={enter} lights={lights} mood={mood} smoke={!status.me_hosting && held?.purpose === "hosting"}>
+      <Scene enter={enter} mood={mood}>
         <div className={cx("scene-copy relative h-full flex flex-col p-8", strip && "pb-[104px]")}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-2 h-7 px-3 rounded-full bg-night-950/55 backdrop-blur-sm ring-1 ring-inset ring-white/10 text-[12.5px] font-bold">
@@ -271,20 +260,6 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
         onClose={() => setError(null)}
         action={err?.code === "remote" || err?.code === "p2p" ? <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button> : undefined}
       />
-
-      {orphans > 0 && (
-        <InfoNote>
-          <span className="flex items-center gap-3 flex-wrap">
-            <span className="flex-1">
-              Há {orphans === 1 ? "um progresso" : `${orphans} progressos`} no mundo sem dono (de single-player ou de conta com login). Vincule ao nick certo para ninguém perder o
-              inventário.
-            </span>
-            <Button className="h-8" onClick={() => onPage("players")}>
-              Ver e vincular
-            </Button>
-          </span>
-        </InfoNote>
-      )}
 
       {/* ---------------------------------------------------------------- sessão (host) */}
       {status.me_hosting && (
@@ -459,43 +434,20 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
  * A cena da identidade, recortada no céu e na casa. A casa tem luz quando o mundo está
  * aberto, pisca enquanto ele se prepara e fica apagada quando o mundo está livre.
  */
-function Scene({
-  enter,
-  lights,
-  mood,
-  smoke,
-  children,
-}: {
-  enter: boolean;
-  lights: "on" | "busy" | "off";
-  mood: "night" | "dawn" | "day";
-  smoke?: boolean;
-  children: ReactNode;
-}) {
+/** Cena do topo: GIF da noite com o mundo fechado e do dia com ele aberto (troca com um esmaecer). */
+function Scene({ enter, mood, children }: { enter: boolean; mood: "night" | "dawn" | "day"; children: ReactNode }) {
   return (
     <section
       className={cx(
-        "scene relative h-[400px] rounded-[22px] overflow-hidden bg-[#1e3870] ring-1 ring-white/10 shadow-[var(--shadow-pop)]",
+        "scene relative h-[400px] rounded-[22px] overflow-hidden bg-[#0b1430] ring-1 ring-white/10 shadow-[var(--shadow-pop)]",
         enter && "scene-enter",
-        lights === "on" && "scene-lit",
-        lights === "busy" && "scene-busy",
         `scene-${mood}`,
       )}
     >
       <div className="scene-art" aria-hidden>
-        <img src="/cena.png" alt="" draggable={false} />
+        <img src="/cena-noite.gif" alt="" draggable={false} />
+        <img src="/cena-dia.gif" alt="" draggable={false} className="scene-day-art" />
         <div className="scene-tint" />
-        <div className="scene-glow" />
-        {smoke && (
-          <span className="scene-smoke">
-            <i />
-            <i />
-            <i />
-          </span>
-        )}
-        <span className="scene-window w1" />
-        <span className="scene-window w2" />
-        <span className="scene-window w3" />
       </div>
       <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(100deg,rgb(6_12_27/0.62)_0%,rgb(6_12_27/0.32)_38%,transparent_62%)]" />
       <div className="absolute inset-0 pointer-events-none rounded-[22px] shadow-[inset_0_1px_0_rgb(255_255_255/0.12)]" />

@@ -48,7 +48,7 @@ footer{margin-top:28px;font-size:12px;color:#6c7899;text-align:center}
 </head>
 <body>
 <main>
-  <div class="brand"><img src="${LOGO_PNG}" alt="" width="40" height="40">Machen Craft</div>
+  <div class="brand"><img src="${LOGO_PNG}" alt="" width="40" height="40">Machenia</div>
   ${
     info.valid
       ? `<h1>${owner} te chamou para o mundo <b>${name}</b></h1>
@@ -58,7 +58,7 @@ footer{margin-top:28px;font-size:12px;color:#6c7899;text-align:center}
   </div>
   <div class="card">
     <ol>
-      <li><span>Baixe e instale o <b>Machen Craft</b> no seu PC com Windows.</span></li>
+      <li><span>Baixe e instale o <b>Machenia</b> no seu PC com Windows.</span></li>
       <li><span>Volte aqui e toque em <b>Abrir convite no app</b> (ou copie o convite e cole no app).</span></li>
       <li><span>Escolha seu nick e clique em <b>Jogar</b>.</span></li>
     </ol>
@@ -73,7 +73,7 @@ footer{margin-top:28px;font-size:12px;color:#6c7899;text-align:center}
       : `<h1>Este convite não vale mais</h1>
   <p class="lead">Ele expirou ou já foi usado. Peça um convite novo para <b>${owner}</b>: leva um clique no app.</p>`
   }
-  <footer>Machen Craft · não afiliado à Mojang nem à Microsoft.</footer>
+  <footer>Machenia · não afiliado à Mojang nem à Microsoft.</footer>
 </main>
 <script>
 (function(){
@@ -88,7 +88,7 @@ footer{margin-top:28px;font-size:12px;color:#6c7899;text-align:center}
   var b64 = btoa(payload).replace(/\\+/g,"-").replace(/\\//g,"_").replace(/=+$/,"");
   var code = "P3J1." + b64;
   var open = document.getElementById("open");
-  if (open) open.href = "machencraft://entrar/" + code;
+  if (open) open.href = "machenia://entrar/" + code;
   var copy = document.getElementById("copy");
   if (copy) copy.onclick = function(){
     var done = function(){ document.getElementById("copied").style.display = "block"; };

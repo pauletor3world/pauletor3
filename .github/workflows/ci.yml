@@ -38,4 +38,4 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: testes
-        run: cargo test -p machencraft-core
+        run: cargo test -p machenia-core

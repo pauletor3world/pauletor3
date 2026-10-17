@@ -7,18 +7,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::Utc;
-use machencraft_core::coord::mem::{MemCoordinator, MemHub};
-use machencraft_core::coord::{rules, Coordinator, LeasePurpose, Presence};
-use machencraft_core::events::quiet;
-use machencraft_core::lease::{LeaseConfig, LeaseGuard, LeaseManager};
-use machencraft_core::manifest::{FileEntry, ManifestKind, ServerVersions};
-use machencraft_core::mirror;
-use machencraft_core::p2p::{self, NetMode, Node, PeerObjects};
-use machencraft_core::paths::Paths;
-use machencraft_core::remote::{layout, EncryptedRemote, FsRemote, Remote};
-use machencraft_core::retention::{self, Policy};
-use machencraft_core::sync::{LocalState, PullOutcome, PushMeta, SyncEngine};
-use machencraft_core::NmError;
+use machenia_core::coord::mem::{MemCoordinator, MemHub};
+use machenia_core::coord::{rules, Coordinator, LeasePurpose, Presence};
+use machenia_core::events::quiet;
+use machenia_core::lease::{LeaseConfig, LeaseGuard, LeaseManager};
+use machenia_core::manifest::{FileEntry, ManifestKind, ServerVersions};
+use machenia_core::mirror;
+use machenia_core::p2p::{self, NetMode, Node, PeerObjects};
+use machenia_core::paths::Paths;
+use machenia_core::remote::{layout, EncryptedRemote, FsRemote, Remote};
+use machenia_core::retention::{self, Policy};
+use machenia_core::sync::{LocalState, PullOutcome, PushMeta, SyncEngine};
+use machenia_core::NmError;
 
 const KEY: [u8; 32] = [42u8; 32];
 
@@ -63,7 +63,7 @@ fn cloud(dir: &Path, tmp: &Path) -> (FsRemote, Arc<dyn Remote>) {
 
 /// Cria um mundo falso com level.dat válido (NBT gzip), regiões e playerdata.
 fn make_world(server: &Path, seed: u8) {
-    use machencraft_core::nbt::{self, Tag};
+    use machenia_core::nbt::{self, Tag};
     let w = server.join("world");
     std::fs::create_dir_all(w.join("region")).unwrap();
     std::fs::create_dir_all(w.join("playerdata")).unwrap();
@@ -173,7 +173,7 @@ async fn planned_handoff_goes_to_newest_replica() {
     ga.release_handoff().await.unwrap();
     let v = b.coord.view().await.unwrap();
     match &v.lease {
-        machencraft_core::coord::LeaseStatus::Free { previous: Some(p) } => {
+        machenia_core::coord::LeaseStatus::Free { previous: Some(p) } => {
             assert!(p.handing_over);
             assert_eq!(p.holder, "a");
         }
@@ -210,7 +210,7 @@ async fn interrupted_upload_never_moves_head() {
     sb.pull(quiet()).await.unwrap();
     let m = sb.fetch_manifest(&m1).await.unwrap();
     for (rel, e) in &m.files {
-        assert_eq!(machencraft_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap(), e.hash);
+        assert_eq!(machenia_core::hashing::sha256_file(&b.paths.server().join(rel)).unwrap(), e.hash);
     }
 
     let m2 = host_push(&a, &se, &g, ManifestKind::Checkpoint, Some(&m1)).await.unwrap();
@@ -405,7 +405,7 @@ async fn p2p_replica_works_without_cloud() {
     // a nuvem "cai" para downloads: tudo tem que vir de A
     fs.fail_after(0);
     let (_, rb) = cloud(nuvem.path(), &b.paths.tmp());
-    let peers: Arc<dyn machencraft_core::sync::ObjectSource> = Arc::new(PeerObjects { node: nb.clone(), peers: vec![na.endpoint.addr()] });
+    let peers: Arc<dyn machenia_core::sync::ObjectSource> = Arc::new(PeerObjects { node: nb.clone(), peers: vec![na.endpoint.addr()] });
     let sb = b.engine(rb).with_peers(Some(peers));
     let head = sb.prefetch(quiet()).await.unwrap().unwrap();
     assert_eq!(head.manifest, m1);
@@ -495,7 +495,7 @@ async fn planned_handoff_requires_same_app_version_and_min_version_reaches_view(
     assert_eq!(b.coord.view().await.unwrap().versao_minima, None);
     h.client("b").set_versao_minima(Some("99.0.0"));
     assert_eq!(b.coord.view().await.unwrap().versao_minima.as_deref(), Some("99.0.0"));
-    assert!(machencraft_core::atualizacao::abaixo_do_minimo(machencraft_core::APP_VERSION, "99.0.0"));
+    assert!(machenia_core::atualizacao::abaixo_do_minimo(machenia_core::APP_VERSION, "99.0.0"));
 }
 
 /// "Chamar pro jogo": o chamado chega uma vez só, na presença de quem foi chamado.

@@ -185,7 +185,7 @@ pub async fn overlay(mc: &Path, id: &str, minecraft: &str) -> NmResult<Overlay> 
     let none = std::collections::BTreeMap::new();
     let mut libraries = vec![];
     let mut replaces = BTreeSet::new();
-    let http = reqwest::Client::builder().user_agent(concat!("MachenCraft/", env!("CARGO_PKG_VERSION"))).build().map_err(|e| NmError::Other(e.into()))?;
+    let http = reqwest::Client::builder().user_agent(concat!("Machenia/", env!("CARGO_PKG_VERSION"))).build().map_err(|e| NmError::Other(e.into()))?;
     for l in &c.libraries {
         if !crate::client::rules_allow(&l.rules, &none) || l.name.contains(":natives-") {
             continue;

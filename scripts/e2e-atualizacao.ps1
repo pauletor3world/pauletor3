@@ -1,6 +1,6 @@
 # Ajuda nos testes de ponta a ponta da atualização automática (roteiro em docs/atualizacao.md).
 #
-#   powershell -ExecutionPolicy Bypass -File scripts\e2e-atualizacao.ps1 hash-mundo [-Pasta D:\MachenCraft]
+#   powershell -ExecutionPolicy Bypass -File scripts\e2e-atualizacao.ps1 hash-mundo [-Pasta D:\Machenia]
 #   powershell -ExecutionPolicy Bypass -File scripts\e2e-atualizacao.ps1 publicar-teste -Versao 2.1.1-beta.1
 #   powershell -ExecutionPolicy Bypass -File scripts\e2e-atualizacao.ps1 assinatura-errada -Versao 2.1.1-beta.2
 #   powershell -ExecutionPolicy Bypass -File scripts\e2e-atualizacao.ps1 minimo-acima
@@ -32,7 +32,7 @@ function Worker {
 switch ($Acao) {
   "hash-mundo" {
     # Hash do mundo salvo (todos os arquivos, em ordem, sem o session.lock): compare antes e depois.
-    if (-not $Pasta) { $Pasta = Join-Path $env:APPDATA "MachenCraft" }
+    if (-not $Pasta) { $Pasta = Join-Path $env:APPDATA "Machenia" }
     $world = Join-Path $Pasta "server\world"
     if (-not (Test-Path $world)) { Fail "Mundo não encontrado em $world (use -Pasta com a pasta de dados do app)." }
     $sha = [Security.Cryptography.SHA256]::Create()

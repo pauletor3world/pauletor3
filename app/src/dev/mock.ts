@@ -106,7 +106,7 @@ const settings: SettingsView = {
     launcher_path: null, direct_launch: true, ram_mb: null, client_ram_mb: null, checkpoint_minutes: 5, grace_minutes: 3, proxy_port: 25565, auto_failover: true,
     wake_on_join: true, background_replica: true, notify_toasts: true, notify_join_leave: true, eula_accepted: true, setup_complete: true,
   },
-  has_admin_token: true, data_dir: "D:\\MachenCraft", build: "pessoal", auto_heap_mb: 6144, total_ram_mb: 32768, direct_launch_available: true, auto_client_heap_mb: 4096,
+  has_admin_token: true, data_dir: "D:\\Machenia", build: "pessoal", auto_heap_mb: 6144, total_ram_mb: 32768, direct_launch_available: true, auto_client_heap_mb: 4096,
   journal_categories: [["session", "Sessões", true], ["deaths", "Mortes", true], ["advancements", "Conquistas", true], ["chat", "Chat", false]],
 };
 
@@ -138,14 +138,14 @@ function atualizacao(scene: string) {
 }
 
 export function installMock(scene: string) {
-  const info: AppInfo = { version: "2.0.4", configured: scene !== "assistente", has_engine: true, data_dir: "D:\\MachenCraft", is_owner: true, start_minimized: false };
+  const info: AppInfo = { version: "2.0.4", configured: scene !== "assistente", has_engine: true, data_dir: "D:\\Machenia", is_owner: true, start_minimized: false };
   const table: Record<string, unknown> = {
     app_info: info, get_status: status(scene), refresh: status(scene), timeline: [status(scene).head, { ...status(scene).head, id: "m0", kind: "checkpoint", created_at: iso(200) }],
     diary, stats, health: checks, get_settings: settings, world_players: players, invites: [], get_private: { discord_webhook: null },
     get_world_settings: { format: 1, world_name: "pAuletOr 3", motd: "pAuletOr 3", difficulty: "normal", gamemode: "survival", view_distance: 12, simulation_distance: 10, max_players: 10, pvp: true, hardcore: false, seed: "", spawn_protection: 0, allow_flight: false },
     console_history: ["[12:00:01] [Server thread/INFO]: Done (3.2s)!", "[12:04:10] [Server thread/INFO]: Sara_23 joined the game", "[12:09:44] [Server thread/WARN]: Can't keep up!"],
     detect_launchers: [], journal_status: { pending: 0, last_error: null, last_sent_at: null }, atualizacao_estado: atualizacao(scene),
-    setup_suggest_dir: { suggested_dir: "D:\\MachenCraft", existing_dir: null, minecraft_dir: null, launchers: [], direct_launch: true, free_space: 312 * 1024 ** 3, pending_invite: null, local_world: null },
+    setup_suggest_dir: { suggested_dir: "D:\\Machenia", existing_dir: null, minecraft_dir: null, launchers: [], direct_launch: true, free_space: 312 * 1024 ** 3, pending_invite: null, local_world: null },
   };
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },

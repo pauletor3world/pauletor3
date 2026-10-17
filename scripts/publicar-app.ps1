@@ -1,4 +1,4 @@
-﻿# Gera o instalador do Machen Craft (build pessoal) e publica no SEU Worker de coordenação.
+﻿# Gera o instalador do Machenia (build pessoal) e publica no SEU Worker de coordenação.
 # Os amigos baixam pelo link do convite, e quem já tem o app recebe a atualização sozinho
 # (o app procura a cada 1 h). Nada vai para um site público.
 #

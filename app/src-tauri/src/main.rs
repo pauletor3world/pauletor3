@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    machencraft_app_lib::run()
+    machenia_app_lib::run()
 }

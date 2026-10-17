@@ -1,6 +1,6 @@
 //! Serviço de atualização do app: procura ao abrir e a cada 1 h, baixa em segundo plano assim
 //! que encontra, e só instala no momento seguro (a decisão mora em
-//! `machencraft_core::atualizacao::Maquina`; aqui ficam o plugin updater, os eventos e a ponte
+//! `machenia_core::atualizacao::Maquina`; aqui ficam o plugin updater, os eventos e a ponte
 //! com a interface).
 //!
 //! Fonte das atualizações:
@@ -13,9 +13,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use machencraft_core::atualizacao::{abaixo_do_minimo, Efeito, Estado, Maquina, Oferta, Pedido};
-use machencraft_core::events::{Event, NoticeLevel};
-use machencraft_core::session::EndReason;
+use machenia_core::atualizacao::{abaixo_do_minimo, Efeito, Estado, Maquina, Oferta, Pedido};
+use machenia_core::events::{Event, NoticeLevel};
+use machenia_core::session::EndReason;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager};
@@ -44,7 +44,7 @@ pub struct Servico {
 impl Default for Servico {
     fn default() -> Self {
         Self {
-            maq: Mutex::new(Maquina::nova(machencraft_core::APP_VERSION)),
+            maq: Mutex::new(Maquina::nova(machenia_core::APP_VERSION)),
             update: Mutex::new(None),
             bytes: Mutex::new(None),
             progresso: Mutex::new(None),
@@ -106,11 +106,11 @@ pub fn iniciar(app: AppHandle) {
     if let Some(p) = marcador(&app) {
         if let Ok(v) = std::fs::read_to_string(&p) {
             let v = v.trim().to_string();
-            if v == machencraft_core::APP_VERSION {
+            if v == machenia_core::APP_VERSION {
                 tracing::info!(versao = %v, "app atualizado");
                 *servico(&app).acabou_de_atualizar.lock().unwrap() = Some(v);
             } else {
-                tracing::warn!(esperada = %v, atual = machencraft_core::APP_VERSION, "a atualização não chegou a ser instalada");
+                tracing::warn!(esperada = %v, atual = machenia_core::APP_VERSION, "a atualização não chegou a ser instalada");
             }
             let _ = std::fs::remove_file(&p);
         }
@@ -160,7 +160,7 @@ async fn buscar(app: &AppHandle) -> Result<Option<(Update, Oferta)>, String> {
         let minima = u.raw_json.get("versao_minima").and_then(|v| v.as_str()).unwrap_or("");
         let obrigatoria = u.raw_json.get("obrigatoria").and_then(|v| v.as_bool()).unwrap_or(false)
             || desatualizado
-            || abaixo_do_minimo(machencraft_core::APP_VERSION, minima);
+            || abaixo_do_minimo(machenia_core::APP_VERSION, minima);
         let o = Oferta { versao: u.version.clone(), notas: u.body.clone().filter(|n| !n.trim().is_empty()), obrigatoria };
         (u, o)
     }))
@@ -229,7 +229,7 @@ fn disparar(app: &AppHandle, efeito: Efeito) {
     tauri::async_runtime::spawn(async move { executar(&app, efeito).await });
 }
 
-async fn momento(app: &AppHandle) -> machencraft_core::atualizacao::Momento {
+async fn momento(app: &AppHandle) -> machenia_core::atualizacao::Momento {
     match app.state::<AppState>().engine() {
         Some(e) => e.momento().await,
         None => Default::default(),
@@ -281,7 +281,7 @@ async fn passar_host(app: &AppHandle) -> Efeito {
             tracing::info!("passando o host (ou fechando o mundo) para atualizar");
             e.encerrar_para_atualizar(PRAZO_TROCA).await.map_err(|e| e.to_string())
         }
-        None => Ok(machencraft_core::atualizacao::FimSeguro::NadaAberto),
+        None => Ok(machenia_core::atualizacao::FimSeguro::NadaAberto),
     };
     match &r {
         Ok(fim) => tracing::info!(?fim, "mundo em estado seguro para atualizar"),

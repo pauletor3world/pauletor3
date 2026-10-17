@@ -35,12 +35,30 @@ export default function App() {
   const loadInfo = useCallback(() => api.appInfo().then(setInfo), []);
 
   useEffect(() => {
-    loadInfo().finally(() => api.appReady());
+    // sem catch: se falhar, a janela aparece mesmo assim (efeito abaixo não roda)
+    loadInfo().catch(() => api.appReady());
     const un = listen("p3://quitting", () => setQuitting(true));
     return () => {
       un.then((f) => f());
     };
   }, [loadInfo]);
+
+  // Só mostra a janela quando a tela já está completa: com o mundo configurado,
+  // espera o primeiro status (com teto de 1,5 s) para não abrir com o HUD vazio e piscar.
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (shown || !info) return;
+    if (info.configured && !status) {
+      const t = window.setTimeout(() => setShown(true), 1500);
+      return () => window.clearTimeout(t);
+    }
+    // um quadro para o React pintar antes de exibir
+    const r = requestAnimationFrame(() => setShown(true));
+    return () => cancelAnimationFrame(r);
+  }, [info, status, shown]);
+  useEffect(() => {
+    if (shown) api.appReady();
+  }, [shown]);
 
   // histórico do sino ("Nover abriu o mundo", ...)
   useEffect(() => {
@@ -106,7 +124,7 @@ export default function App() {
           }
         />
         <main className="flex-1 min-h-0 scroll">
-          <div className="max-w-[1080px] mx-auto px-8 pt-3 pb-10">
+          <div className="max-w-[1080px] mx-auto px-8 pt-3 pb-6">
             {upd.a?.acabou_de_atualizar && <UpdatedBanner versao={upd.a.acabou_de_atualizar} onClose={() => atualizacaoApi.visto()} />}
             {bloqueado && update ? (
               <UpdateGate {...update} />

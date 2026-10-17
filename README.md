@@ -1,6 +1,6 @@
-<p align="center"><img src="identidade/machen-craft-pixelart-arredondado-3840x2160.png" alt="Machen Craft" width="720"></p>
+<p align="center"><img src="identidade/machen-craft-pixelart-arredondado-3840x2160.png" alt="Machenia" width="720"></p>
 
-# Machen Craft
+# Machenia
 
 O app que mantém o mundo de Minecraft do grupo sempre no ar entre amigos, sem pagar host e sem ninguém mexer em rede. O mundo configurado hoje é o **pAuletOr 3**.
 
@@ -51,14 +51,14 @@ Abrem o link no PC → baixam e instalam → **Abrir convite no app** → escolh
 ## Estrutura
 
 ```
-core/          machencraft-core: sincronização, vez de hospedar, P2P, proxy, servidor, sessão (Rust)
-  src/bin/     machencraft-cli: a mesma lógica pela linha de comando
+core/          machenia-core: sincronização, vez de hospedar, P2P, proxy, servidor, sessão (Rust)
+  src/bin/     machenia-cli: a mesma lógica pela linha de comando
   tests/       integração (rede simulada) e contrato com o Worker
 coordinator/   coordenação (Cloudflare Worker + Durable Objects, TypeScript)
 app/           app desktop (Tauri 2 + React + TypeScript + Tailwind)
 scripts/       publicar-coordenacao.ps1, publicar-app.ps1, e2e-failover.sh, e2e-troca.sh, robo-jogador.py
 docs/          documentação
-identidade/    logo, ícone e cena em pixel art (arte final do Machen Craft)
+identidade/    logo, ícone e cena em pixel art (arte final do Machenia)
 legacy/        projeto antigo, só referência (a v1 está na tag v1-final)
 ```
 
@@ -67,7 +67,7 @@ legacy/        projeto antigo, só referência (a v1 está na tag v1-final)
 Pré-requisitos: Rust stable (MSVC), Build Tools do Visual Studio, Node 22+. Neste PC ficam em `D:\DevTools`.
 
 ```powershell
-cargo test -p machencraft-core                                  # unitários + integração
+cargo test -p machenia-core                                  # unitários + integração
 cargo clippy --workspace --all-targets -- -D warnings
 cd coordinator; npm ci; npx tsc --noEmit; npx vitest run      # Worker
 cd app; npm ci; npm run typecheck; npm run lint; npm run build # interface
@@ -83,7 +83,7 @@ Contrato Rust ↔ Worker e teste de ponta a ponta com servidor real:
 
 ```bash
 cd coordinator && npx wrangler dev --local --port 8787        # ADMIN_TOKEN em coordinator/.dev.vars
-P3_COORD_URL=http://127.0.0.1:8787 P3_ADMIN=dev-admin-local cargo test -p machencraft-core --test contract_http
+P3_COORD_URL=http://127.0.0.1:8787 P3_ADMIN=dev-admin-local cargo test -p machenia-core --test contract_http
 bash scripts/e2e-failover.sh                                  # queda do host + troca automática, medida
 bash scripts/e2e-troca.sh                                     # Parar com amigo jogando: host passa sem derrubar ninguém
 ```
@@ -96,7 +96,7 @@ bash scripts/e2e-troca.sh                                     # Parar com amigo 
 ### CLI
 
 ```text
-machencraft-cli create-world | join <convite> | invite | members | approve | remove
-machencraft-cli up [--play] | play | status | health | diagnose | diary | timeline
-machencraft-cli restore <id> | gc | pull | prepare | import <pasta> | players | migrate-player
+machenia-cli create-world | join <convite> | invite | members | approve | remove
+machenia-cli up [--play] | play | status | health | diagnose | diary | timeline
+machenia-cli restore <id> | gc | pull | prepare | import <pasta> | players | migrate-player
 ```

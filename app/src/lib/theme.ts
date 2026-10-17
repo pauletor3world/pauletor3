@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 export type Theme = "light" | "dark";
 const KEY = "machencraft.tema";
 
-function inicial(): Theme {
+export function temaInicial(): Theme {
   const dev = import.meta.env.DEV ? new URLSearchParams(location.search).get("tema") : null;
   if (dev === "claro") return "light";
   if (dev === "escuro") return "dark";
@@ -18,7 +18,7 @@ function inicial(): Theme {
 
 /** Tema claro/escuro: segue o Windows até a pessoa escolher no botão da barra superior. */
 export function useTheme() {
-  const [theme, set] = useState<Theme>(inicial);
+  const [theme, set] = useState<Theme>(temaInicial);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);

@@ -1,4 +1,4 @@
-# Manual do jogador do Machen Craft
+# Manual do jogador do Machenia
 
 ## Entrar pela primeira vez (amigo)
 

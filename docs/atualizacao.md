@@ -1,4 +1,4 @@
-# Atualização automática do Machen Craft
+# Atualização automática do Machenia
 
 Quem tem o app instalado vê "Atualização disponível" no sino da barra superior e no rodapé
 da barra lateral. O download acontece sozinho, em segundo plano. Com um clique em
@@ -172,7 +172,7 @@ O build pessoal não muda: ele continua indo só para o Worker.
 
 ## Testes de ponta a ponta (fase 7)
 
-Automáticos: `cargo test -p machencraft-core` (máquina de estados e regras) e
+Automáticos: `cargo test -p machenia-core` (máquina de estados e regras) e
 `cd coordinator; npx vitest run` (versão mínima, troca entre versões, canais, notas).
 
 Roteiro manual. O script `scripts\e2e-atualizacao.ps1` ajuda nos passos marcados com ▶.
