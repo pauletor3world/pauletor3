@@ -1,7 +1,8 @@
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 import { bytesToHex, sha256Hex } from "../src/auth";
-import { decideAcquire, LEASE_TTL_MS, FAILOVER_PREFERENCE_MS, type LeaseInfo } from "../src/rules";
+import { compareVersions } from "../src/app-dist";
+import { decideAcquire, handoffVersionConflict, LEASE_TTL_MS, FAILOVER_PREFERENCE_MS, type LeaseInfo } from "../src/rules";
 
 const BASE = "https://coord.test";
 const worker = (exports as unknown as { default: { fetch(r: Request): Promise<Response> } }).default;
@@ -305,5 +306,115 @@ describe("distribuição do app pelo Worker", () => {
     expect((await signed(owner, `/u/${world_id}/installer`)).status).toBe(200);
     const stranger = await newApp();
     expect((await signed(stranger, `/u/${world_id}/latest.json`)).status).toBe(403);
+  });
+});
+
+describe("versão do app", () => {
+  const admin = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+    worker.fetch(
+      new Request(`${BASE}${path}`, {
+        method,
+        headers: { "x-p3-admin": "admin-de-teste", "content-type": "application/json", ...headers },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+    );
+
+  it("compara versões", () => {
+    expect(compareVersions("2.0.3", "2.1.0")).toBe(-1);
+    expect(compareVersions("2.1.0", "2.1.0")).toBe(0);
+    expect(compareVersions("2.10.0", "2.9.9")).toBe(1);
+    expect(compareVersions("2.1.0-beta.1", "2.1.0")).toBe(-1);
+    expect(compareVersions("t", "2.1.0")).toBe(0);
+  });
+
+  it("troca planejada só entre a mesma versão (mesmos casos do Rust)", () => {
+    const now = Date.now();
+    const l: LeaseInfo = {
+      format: 1, session_number: 7, session_id: "s", holder: "a", player: "Ana", machine: "pc", endpoint: null,
+      app_version: "2.0.3", purpose: "hosting", acquired_at: new Date(now - LEASE_TTL_MS).toISOString(),
+      heartbeat_at: new Date(now - LEASE_TTL_MS).toISOString(), vouched_at: null, handing_over: true, online: [],
+    };
+    expect(handoffVersionConflict(now, l, "b", "2.1.0")).toBe(true);
+    expect(handoffVersionConflict(now, l, "b", "2.0.3")).toBe(false);
+    expect(handoffVersionConflict(now, l, "a", "2.1.0")).toBe(false);
+    expect(handoffVersionConflict(now + FAILOVER_PREFERENCE_MS + 1000, l, "b", "2.1.0")).toBe(false);
+    expect(handoffVersionConflict(now, { ...l, handing_over: false }, "b", "2.1.0")).toBe(false);
+  });
+
+  it("a coordenação recusa a troca planejada entre versões diferentes", async () => {
+    const { owner, w } = await world();
+    const { friend } = await join(owner, w, "Amigo_v");
+    const la = await ok<LeaseInfo>(call(owner, "POST", `${w}/lease/acquire`, { ...acquireReq("s1"), app_version: "2.0.3" }));
+    await ok(call(owner, "POST", `${w}/lease/release`, { session_number: la.session_number, handoff: true }));
+    const e = await err(call(friend, "POST", `${w}/lease/acquire`, { ...acquireReq("s2"), app_version: "2.1.0" }));
+    expect(e.error).toBe("app_version_mismatch");
+    expect(e.host_version).toBe("2.0.3");
+    await ok(call(friend, "POST", `${w}/lease/acquire`, { ...acquireReq("s3"), app_version: "2.0.3" }));
+  });
+
+  it("versão mínima: o dono define sem publicar app, chega na fotografia e bloqueia hospedar", async () => {
+    const { owner, w } = await world();
+    expect((await admin("PUT", "/v1/app/versao-minima", { versao_minima: "2.1.0" }, { "x-p3-admin": "errada" })).status).toBe(403);
+    expect((await admin("PUT", "/v1/app/versao-minima", { versao_minima: "abc" })).status).toBe(400);
+    expect((await admin("PUT", "/v1/app/versao-minima", { versao_minima: "2.1.0" })).status).toBe(200);
+    const v = await ok(call(owner, "GET", `${w}/view`));
+    expect(v.versao_minima).toBe("2.1.0");
+    const p = await ok(call(owner, "POST", `${w}/presence`, { endpoint: null, replica_seq: 0, playing: false, host_reachable: null, app_version: "2.0.3" }));
+    expect(p.versao_minima).toBe("2.1.0");
+    const e = await err(call(owner, "POST", `${w}/lease/acquire`, { ...acquireReq("s1"), app_version: "2.0.3" }));
+    expect(e.error).toBe("app_outdated");
+    expect(e.versao_minima).toBe("2.1.0");
+    await ok(call(owner, "POST", `${w}/lease/release`, { session_number: (await ok<LeaseInfo>(call(owner, "POST", `${w}/lease/acquire`, { ...acquireReq("s2"), app_version: "2.1.0" }))).session_number }));
+    expect((await admin("PUT", "/v1/app/versao-minima", { versao_minima: null })).status).toBe(200);
+    expect((await ok(call(owner, "GET", `${w}/view`))).versao_minima).toBe(null);
+  });
+
+  it("notas em UTF-8, obrigatória e canal de teste separado", async () => {
+    const { owner, world_id } = await world();
+    const notas = "Correções e atualização automática ✓";
+    const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(notas)));
+    const put = (q: string, version: string, extra: Record<string, string> = {}) =>
+      worker.fetch(
+        new Request(`${BASE}/v1/app/installer${q}`, {
+          method: "PUT",
+          headers: { "x-p3-admin": "admin-de-teste", "x-p3-version": version, "x-p3-updater-signature": "c2ln", "x-p3-notes-b64": b64, "content-length": "10", ...extra },
+          body: new Uint8Array(10).fill(1),
+        }),
+      );
+    expect((await put("", "2.2.0", { "x-p3-obrigatoria": "1" })).status).toBe(200);
+    expect((await put("?canal=teste", "2.3.0-beta.1")).status).toBe(200);
+    const signed = async (path: string) => {
+      const ts = Date.now();
+      const msg = `p3v1
+GET
+/u/${world_id}
+${ts}
+-`;
+      const sig = await crypto.subtle.sign({ name: "Ed25519" }, owner.key, new TextEncoder().encode(msg));
+      return worker.fetch(new Request(`${BASE}${path}`, { headers: { "x-p3-id": owner.id, "x-p3-ts": String(ts), "x-p3-sig": bytesToHex(sig) } }));
+    };
+    const est = (await (await signed(`/u/${world_id}/latest.json`)).json()) as any;
+    expect(est.version).toBe("2.2.0");
+    expect(est.notes).toBe(notas);
+    expect(est.obrigatoria).toBe(true);
+    const teste = (await (await signed(`/u/${world_id}/latest.json?canal=teste`)).json()) as any;
+    expect(teste.version).toBe("2.3.0-beta.1");
+    expect(teste.platforms["windows-x86_64"].url).toContain("canal=teste");
+    expect((await signed(`/u/${world_id}/installer?canal=teste`)).status).toBe(200);
+    expect((await put("", "2.2.1", { "x-p3-updater-signature": "" })).status).toBe(400);
+  });
+});
+
+describe("chamar pro jogo", () => {
+  it("o chamado chega uma vez, na presença de quem foi chamado", async () => {
+    const { owner, w } = await world();
+    const { friend } = await join(owner, w, "Bia_c");
+    await ok(call(friend, "POST", `${w}/call`, { to: owner.id }));
+    const p = { endpoint: null, replica_seq: 0, playing: false, host_reachable: null, app_version: "t" };
+    const v1 = await ok(call(owner, "POST", `${w}/presence`, p));
+    expect(v1.chamado?.de).toBe("Bia_c");
+    const v2 = await ok(call(owner, "POST", `${w}/presence`, p));
+    expect(v2.chamado).toBeUndefined();
+    expect((await err(call(friend, "POST", `${w}/call`, { to: "naoexiste" }))).error).toBe("not_member");
   });
 });

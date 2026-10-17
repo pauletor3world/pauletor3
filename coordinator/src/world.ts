@@ -18,6 +18,7 @@ import {
   Presence,
   SeenPresence,
   decideAcquire,
+  handoffVersionConflict,
   leaseStatus,
   validNick,
 } from "./rules";
@@ -96,6 +97,8 @@ export interface WorldView {
   members: Member[];
   now: string;
   me: Member | null;
+  /** "Chamar pro jogo": entregue uma vez, na presença de quem foi chamado. */
+  chamado?: { de: string; em: string };
 }
 
 export interface AcquireRequest {
@@ -138,11 +141,14 @@ export const RPC_METHODS = [
   "setPrivateSettings",
   "usage",
   "addUsage",
+  "call",
 ] as const;
 export type RpcMethod = (typeof RPC_METHODS)[number];
 export type RpcResult = { ok: true; v: unknown } | { ok: false; status: number; body: Record<string, unknown> };
 
 const HEARTBEAT_PERSIST_MS = 15_000;
+/** Um chamado vale por 15 min (quem abre o app depois disso não recebe aviso velho). */
+const CALL_TTL_MS = 15 * 60_000;
 const LAST_SEEN_PERSIST_MS = 10 * 60_000;
 const MAX_EVENTS = 2000;
 
@@ -154,6 +160,8 @@ export class WorldDO extends DurableObject<Env> {
   private leasePersistedAt = 0;
   private online = new Map<string, { p: Presence; at: number }>();
   private lastSeenPersisted = new Map<string, number>();
+  /** "Chamar pro jogo": quem chamou cada membro (entregue uma vez, na presença dele). */
+  private calls = new Map<string, { de: string; at: number }>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -303,6 +311,10 @@ export class WorldDO extends DurableObject<Env> {
   async acquire(caller: string, req: AcquireRequest, now = Date.now()): Promise<LeaseInfo> {
     this.requireMember(caller);
     const seen: SeenPresence[] = [...this.online.entries()].map(([member, v]) => ({ member, presence: v.p, at: v.at }));
+    const appVersion = String(req.app_version ?? "").slice(0, 32);
+    if (handoffVersionConflict(now, this.lease, caller, appVersion)) {
+      throw new ApiError(409, "app_version_mismatch", "quem está passando o host usa outra versão do app", { host_version: this.lease!.app_version });
+    }
     const d = decideAcquire(now, this.lease, caller, req.replica_seq ?? 0, seen);
     if (d.kind === "held") throw new ApiError(409, "held_by", `${d.lease.player} já está hospedando`, { lease: d.lease });
     if (d.kind === "not_best") throw new ApiError(409, "not_best", "outro membro tem uma cópia mais nova", { best_seq: d.best_seq });
@@ -418,7 +430,21 @@ export class WorldDO extends DurableObject<Env> {
       this.sql.exec(`UPDATE members SET last_seen = ? WHERE id = ?`, iso(now), caller);
       this.lastSeenPersisted.set(caller, now);
     }
-    return this.view(caller, now);
+    const v = await this.view(caller, now);
+    const c = this.calls.get(caller);
+    if (c) {
+      this.calls.delete(caller);
+      if (now - c.at < CALL_TTL_MS) return { ...v, chamado: { de: c.de, em: iso(c.at) } };
+    }
+    return v;
+  }
+
+  /** Chama um membro pro jogo: o app dele mostra a notificação na próxima presença. */
+  async call(caller: string, to: string, now = Date.now()): Promise<{}> {
+    const me = this.requireMember(caller);
+    if (!this.memberRow(String(to))) throw new ApiError(404, "not_member", "esse membro não está no mundo");
+    this.calls.set(String(to), { de: me.nick, at: now });
+    return {};
   }
 
   // ------------------------------------------------------------------ diário

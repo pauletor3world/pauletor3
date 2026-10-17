@@ -42,6 +42,10 @@ struct ApiError {
     best_seq: Option<u64>,
     #[serde(default)]
     current: Option<String>,
+    #[serde(default)]
+    host_version: Option<String>,
+    #[serde(default)]
+    versao_minima: Option<String>,
 }
 
 pub enum Body<'a> {
@@ -133,6 +137,8 @@ impl ApiClient {
             "head_moved" => NmError::HeadMoved { current: e.current },
             "forbidden" | "not_member" | "pending_approval" | "bad_signature" | "invite_invalid" => NmError::Forbidden(msg),
             "format_too_new" => NmError::FormatTooNew { found: 0 },
+            "app_version_mismatch" => NmError::AppVersionMismatch { host: e.host_version.unwrap_or_default(), mine: crate::APP_VERSION.into() },
+            "app_outdated" => NmError::AppOutdated { atual: crate::APP_VERSION.into(), minima: e.versao_minima.unwrap_or_default() },
             "quota" => NmError::Remote(format!("a nuvem do mundo está cheia: {msg}")),
             _ if status.is_server_error() || status.as_u16() == 429 => NmError::Remote(msg),
             _ => NmError::Remote(format!("{status}: {msg}")),
@@ -307,6 +313,15 @@ impl Coordinator for HttpCoordinator {
 
     async fn set_private_settings(&self, s: &PrivateSettings) -> NmResult<()> {
         let _: Ok_ = self.api.json(reqwest::Method::PUT, &self.api.world_path("private"), Some(s)).await?;
+        Ok(())
+    }
+
+    async fn call(&self, to: &str) -> NmResult<()> {
+        #[derive(Serialize)]
+        struct Req<'a> {
+            to: &'a str,
+        }
+        let _: Ok_ = self.api.json(reqwest::Method::POST, &self.api.world_path("call"), Some(&Req { to })).await?;
         Ok(())
     }
 }

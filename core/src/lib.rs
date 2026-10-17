@@ -5,6 +5,7 @@
 //! ([`server`]) e a orquestração de sessão ([`session`]). A interface (Tauri) e a CLI são
 //! apenas clientes deste crate.
 
+pub mod atualizacao;
 pub mod checkpoint;
 pub mod client;
 pub mod config;
@@ -15,6 +16,7 @@ pub mod journal;
 pub mod error;
 pub mod events;
 pub mod hashing;
+pub mod instancias;
 pub mod health;
 pub mod heap;
 pub mod invite;
@@ -27,6 +29,7 @@ pub mod logparse;
 pub mod manifest;
 pub mod mirror;
 pub mod nbt;
+pub mod numeros;
 pub mod p2p;
 pub mod paths;
 pub mod players;

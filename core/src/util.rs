@@ -190,6 +190,21 @@ pub fn random_token(len: usize) -> String {
     rand::thread_rng().sample_iter(&Alphanumeric).take(len).map(char::from).collect()
 }
 
+/// Copia uma pasta inteira (para quando `rename` não serve, como entre discos diferentes).
+pub fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for e in std::fs::read_dir(src)? {
+        let e = e?;
+        let to = dst.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copy_dir_all(&e.path(), &to)?;
+        } else {
+            std::fs::copy(e.path(), to)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,3 +238,4 @@ mod tests {
         assert_eq!(human_duration(30), "menos de 1 min");
     }
 }
+

@@ -21,8 +21,6 @@
     "autostart:allow-enable",
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
-    "updater:default",
-    "process:allow-restart",
     "opener:allow-open-url",
     "deep-link:default",
     "core:event:default",

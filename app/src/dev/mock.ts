@@ -110,6 +110,33 @@ const settings: SettingsView = {
   journal_categories: [["session", "Sessões", true], ["deaths", "Mortes", true], ["advancements", "Conquistas", true], ["chat", "Chat", false]],
 };
 
+// ?upd=disponivel|baixando|host|obrigatoria|atualizado|ao_fechar|passando: estado da atualização do app
+function atualizacao(scene: string) {
+  const upd = new URLSearchParams(location.search).get("upd");
+  const notas = [
+    "- O app se atualiza sozinho: quando sair uma versão nova, aparece um aviso.",
+    "- Se você estiver hospedando, o host passa para um amigo antes de atualizar.",
+    "- A atualização baixa em segundo plano, com barra de progresso.",
+  ].join("\n");
+  const base = {
+    estado: "sem_atualizacao", versao_atual: "2.0.4", oferta: null as null | { versao: string; notas: string | null; obrigatoria: boolean }, pedido: null as null | string,
+    baixado: 0, total: null as number | null, erro: null as string | null, passando_host: false, obrigatoria: false, sou_host: scene === "host", bloqueado: false,
+    versao_minima: null as string | null, acabou_de_atualizar: null as string | null,
+  };
+  const oferta = { versao: "2.1.0", notas, obrigatoria: false };
+  switch (upd) {
+    case "disponivel": return { ...base, estado: "pronta_para_instalar", oferta };
+    case "baixando": return { ...base, estado: "baixando", oferta, baixado: 23.4 * 1024 ** 2, total: 61.8 * 1024 ** 2 };
+    case "host": return { ...base, estado: "pronta_para_instalar", oferta, sou_host: true };
+    case "passando": return { ...base, estado: "aguardando_momento_seguro", oferta, sou_host: true, passando_host: true, pedido: "agora" };
+    case "ao_fechar": return { ...base, estado: "pronta_para_instalar", oferta, pedido: "ao_fechar" };
+    case "erro": return { ...base, estado: "disponivel", oferta, erro: "Não deu para baixar a atualização agora. Vamos tentar de novo mais tarde." };
+    case "obrigatoria": return { ...base, estado: "pronta_para_instalar", oferta: { ...oferta, obrigatoria: true }, obrigatoria: true, bloqueado: true, versao_minima: "2.1.0" };
+    case "atualizado": return { ...base, versao_atual: "2.1.0", acabou_de_atualizar: "2.1.0" };
+    default: return base;
+  }
+}
+
 export function installMock(scene: string) {
   const info: AppInfo = { version: "2.0.4", configured: scene !== "assistente", has_engine: true, data_dir: "D:\\MachenCraft", is_owner: true, start_minimized: false };
   const table: Record<string, unknown> = {
@@ -117,7 +144,7 @@ export function installMock(scene: string) {
     diary, stats, health: checks, get_settings: settings, world_players: players, invites: [], get_private: { discord_webhook: null },
     get_world_settings: { format: 1, world_name: "pAuletOr 3", motd: "pAuletOr 3", difficulty: "normal", gamemode: "survival", view_distance: 12, simulation_distance: 10, max_players: 10, pvp: true, hardcore: false, seed: "", spawn_protection: 0, allow_flight: false },
     console_history: ["[12:00:01] [Server thread/INFO]: Done (3.2s)!", "[12:04:10] [Server thread/INFO]: Sara_23 joined the game", "[12:09:44] [Server thread/WARN]: Can't keep up!"],
-    detect_launchers: [], journal_status: { pending: 0, last_error: null, last_sent_at: null }, update_check: scene === "host" ? null : { version: "2.0.5", notes: null },
+    detect_launchers: [], journal_status: { pending: 0, last_error: null, last_sent_at: null }, atualizacao_estado: atualizacao(scene),
     setup_suggest_dir: { suggested_dir: "D:\\MachenCraft", existing_dir: null, minecraft_dir: null, launchers: [], direct_launch: true, free_space: 312 * 1024 ** 3, pending_invite: null, local_world: null },
   };
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {

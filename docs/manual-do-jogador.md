@@ -24,11 +24,17 @@ Clique em **Jogar**. O app abre o Minecraft; no **Multiplayer**, entre em **pAul
 - **Se quem hospeda cair de repente** (luz, internet), o jogo dos outros desconecta e aparece “Trocando de host…”. Entre de novo em **pAuletOr 3**: você espera na porta (“Entrando...”) enquanto um amigo assume, e entra sozinho. O mundo continua do último salvamento.
 - O mundo fecha e é guardado sozinho quando o último jogador sai.
 
-## A turma, o diário e as versões
+## O grupo, o diário e as versões
 
-- **Mundo e turma**: quem é membro e quem está online. O dono gera convites, aprova e remove pessoas.
+- **Grupo**: quem é membro e quem está online. O dono gera convites, aprova e remove pessoas.
 - **Diário**: quem entrou, mortes, conquistas e trocas de host. Em **Versões salvas** dá para restaurar qualquer versão (nada é apagado; vira uma versão nova).
 
 ## Problemas
 
 Abra **Saúde**: cada item vermelho ou amarelo tem um botão de correção. Se não resolver, clique em **Copiar diagnóstico** e mande para o dono.
+
+## Skins, versão do Minecraft e atualizações
+
+- **Skins:** o servidor busca a skin de cada um pelo nick, na Mojang. Se o seu nick não for o de uma conta original, digite no chat do jogo `/skin set mojang <nome-da-conta>` (ou `/skin set web classic <link-da-imagem>`).
+- **OptiFine / Fabric:** em Configurações → "Versão do Minecraft", escolha a versão da sua `.minecraft` (precisa ser da mesma versão do mundo). O jogo abre com seus mods, shaders e opções.
+- **Atualizações:** quando sair uma versão nova, o sino da barra de cima ganha um selo. Clique em **Atualizar agora** ou **Atualizar ao fechar**. Se você for o host, o host passa para um amigo antes.

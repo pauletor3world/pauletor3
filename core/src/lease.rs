@@ -57,7 +57,7 @@ impl LeaseManager {
             req.replica_seq = req.replica_seq.max(replica());
             match self.acquire(req.clone()).await {
                 Err(NmError::NotBestCandidate { .. }) if tokio::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
                 r => return r,
             }

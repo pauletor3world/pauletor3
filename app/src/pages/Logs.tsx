@@ -1,8 +1,8 @@
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { ArrowDownToLine, ClipboardCopy, Search, SendHorizonal, Terminal } from "lucide-react";
+import { ClipboardCopy, History, Search, SendHorizonal, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Card, Empty, ErrorBanner, PageHeader, cx, inputCls } from "../components/ui";
+import { Button, Card, Empty, ErrorBanner, PageHeader, Toggle, cx, inputCls } from "../components/ui";
 import { api } from "../lib/api";
 import { useAction, type Toast } from "../lib/hooks";
 import type { Status } from "../lib/types";
@@ -77,14 +77,32 @@ export default function Logs({ status, toast }: { status: Status | null; toast: 
           <Search className="size-4 absolute left-3 top-3 text-ink-faint" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar no console…" className={cx(inputCls, "pl-9")} />
         </div>
-        <Button variant={follow ? "secondary" : "ghost"} icon={<ArrowDownToLine className="size-4" />} onClick={() => setFollow((f) => !f)} title="Acompanhar o fim">
-          {follow ? "Acompanhando" : "Pausado"}
-        </Button>
+        <div className="shrink-0 -my-3">
+          <Toggle checked={follow} onChange={setFollow} label="Rolar automaticamente" />
+        </div>
       </div>
       <Card className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {shown.length === 0 ? (
           <Empty icon={<Terminal className="size-6" />} title={q ? "Nada encontrado" : "Console vazio"}>
-            {q ? "Tente outra busca." : "As mensagens do servidor aparecem aqui enquanto você hospeda."}
+            {q ? (
+              "Tente outra busca."
+            ) : (
+              <div className="space-y-3">
+                <div>As mensagens do servidor aparecem aqui enquanto você hospeda.</div>
+                <Button
+                  icon={<History className="size-4" />}
+                  busy={busy === "last"}
+                  onClick={() =>
+                    run("last", api.lastSessionLog).then((l) => {
+                      if (l && l.length) setLines(l);
+                      else if (l) toast({ level: "info", title: "Ainda não há log", body: "Este PC ainda não hospedou uma sessão." });
+                    })
+                  }
+                >
+                  Ver log da última sessão
+                </Button>
+              </div>
+            )}
           </Empty>
         ) : (
           <div

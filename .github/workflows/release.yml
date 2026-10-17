@@ -1,9 +1,12 @@
-# Publica uma versão do BUILD PADRÃO (online-mode=true) do app no GitHub.
-# O build pessoal (modo offline) NUNCA vai para cá: ele é publicado só no Worker do dono
-# (scripts/publicar-app.ps1), para quem tem convite.
-# Dispara ao enviar uma tag "v*" (ex.: v0.2.0). Segredos necessários no repositório:
-#   TAURI_SIGNING_PRIVATE_KEY           conteúdo do arquivo pauletor3-updater.key
+# Gera o BUILD PADRÃO (online-mode=true) numa release em RASCUNHO no GitHub, com o
+# instalador NSIS, o .sig e o latest.json do updater. Fica em rascunho (ninguém vê, nada é
+# baixado pelos apps) até o dono decidir a versão comercial e publicar o rascunho.
+# O build pessoal (modo offline) NUNCA vai para cá: ver publicar-pessoal.yml.
+#
+# Dispara ao enviar uma tag "v*" (ex.: v2.1.0). Segredos do repositório:
+#   TAURI_SIGNING_PRIVATE_KEY           conteúdo do arquivo da chave privada do updater
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  senha da chave
+# Publicar num repositório separado só de releases (código privado): ver docs/atualizacao.md.
 name: release
 
 on:
@@ -24,12 +27,29 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: app/package-lock.json
+      - name: versão igual em todos os arquivos (e na tag)
+        run: node scripts/conferir-versao.mjs "${{ github.ref_name }}"
+      - name: notas da versão (CHANGELOG.md ou mensagem da tag)
+        id: notas
+        shell: bash
+        run: |
+          VERSAO=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+            export NOTAS_DA_TAG="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")"
+          fi
+          node scripts/notas-da-versao.mjs "$VERSAO" > "$RUNNER_TEMP/notas.md"
+          {
+            echo "body<<FIM_DAS_NOTAS"
+            cat "$RUNNER_TEMP/notas.md"
+            echo "FIM_DAS_NOTAS"
+          } >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: dependências da interface
         working-directory: app
         run: npm ci
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -38,7 +58,8 @@ jobs:
           projectPath: app
           tagName: ${{ github.ref_name }}
           releaseName: "Machen Craft ${{ github.ref_name }}"
-          releaseBody: "Baixe o instalador .exe abaixo. Quem já tem o app recebe a atualização sozinho."
-          releaseDraft: false
+          releaseBody: ${{ steps.notas.outputs.body }}
+          releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true

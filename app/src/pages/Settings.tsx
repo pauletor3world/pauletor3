@@ -6,13 +6,14 @@ import { Button, Card, CardTitle, ErrorBanner, Field, InfoNote, PageHeader, Pill
 import { api } from "../lib/api";
 import { bytes } from "../lib/format";
 import { useAction, type Toast } from "../lib/hooks";
-import type { Category, JournalStatus, LauncherCandidate, SettingsView, Status, WorldSettings } from "../lib/types";
+import type { Category, ClientVersion, JournalStatus, LauncherCandidate, SettingsView, Status, WorldSettings } from "../lib/types";
 
 type ToastFn = (t: Omit<Toast, "id" | "type">) => void;
 
 export default function SettingsPage({ status, isOwner, toast }: { status: Status | null; isOwner: boolean; toast: ToastFn }) {
   const [s, setS] = useState<SettingsView | null>(null);
   const [launchers, setLaunchers] = useState<LauncherCandidate[]>([]);
+  const [versions, setVersions] = useState<ClientVersion[]>([]);
   const [auto, setAuto] = useState(false);
   const { busy, error, setError, run } = useAction();
 
@@ -22,6 +23,7 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
   useEffect(() => {
     load();
     api.detectLaunchers().then(setLaunchers).catch(() => {});
+    api.clientVersions().then(setVersions).catch(() => {});
     autostartIs().then(setAuto).catch(() => {});
   }, [load]);
 
@@ -53,7 +55,9 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
 
         <Section title="Você e o jogo">
           <div className="grid grid-cols-2 gap-4">
-            <TextSetting label="Seu nick no Minecraft" value={c.player_name} hint={c.direct_launch && s.direct_launch_available ? "É o nome que aparece no jogo. Não muda com o mundo aberto." : "Igual ao do launcher. Não muda com o mundo aberto."} onSave={(v) => save({ player_name: v })} />
+            <Field label="Seu nick no Minecraft" hint="Fica travado: um nick novo vira outro jogador e o inventário some. Para trocar, peça ao dono, que leva o progresso junto em Jogadores.">
+              <input className={inputCls} value={c.player_name} readOnly />
+            </Field>
             <PathSetting label="Pasta .minecraft" value={c.minecraft_dir ?? ""} directory onSave={(v) => save({ minecraft_dir: v })} />
           </div>
           {s.direct_launch_available && (
@@ -66,10 +70,34 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
               />
               {c.direct_launch && (
                 <div className="grid grid-cols-2 gap-4 mt-3">
-                  <NumberSetting
-                    label="Memória do jogo (MB)"
+                  <Field
+                    label="Versão do Minecraft"
+                    hint={
+                      versions.length > 1
+                        ? "Como nos launchers: OptiFine e Fabric da sua .minecraft usam seus mods, shaders e opções."
+                        : "Instale o OptiFine ou o Fabric na .minecraft (versão do mundo) para escolher aqui."
+                    }
+                  >
+                    <select
+                      className={inputCls}
+                      value={c.client_version ?? ""}
+                      onChange={(e) => save({ client_version: e.target.value }, "Versão do Minecraft escolhida")}
+                    >
+                      {versions.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label}
+                        </option>
+                      ))}
+                      {c.client_version && !versions.some((v) => v.id === c.client_version) && <option value={c.client_version}>{c.client_version} (não encontrada)</option>}
+                    </select>
+                  </Field>
+                  <MemorySetting
+                    label="Memória do jogo"
                     value={c.client_ram_mb ?? 0}
-                    hint={`0 = automático (${(s.auto_client_heap_mb / 1024).toFixed(1).replace(".", ",")} GB; menos quando você hospeda, para sobrar para o servidor)`}
+                    auto={s.auto_client_heap_mb}
+                    total={s.total_ram_mb}
+                    recommended={[3072, 6144]}
+                    autoHint="Menos quando você hospeda, para sobrar para o servidor."
                     onSave={(v) => save({ client_ram_mb: v })}
                   />
                 </div>
@@ -108,14 +136,31 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
 
         <Section title="Desempenho e salvamento">
           <div className="grid grid-cols-3 gap-4">
-            <NumberSetting
-              label="Memória do servidor (MB)"
+            <MemorySetting
+              label="Memória do servidor"
               value={c.ram_mb ?? 0}
-              hint={`0 = automático (${(s.auto_heap_mb / 1024).toFixed(0)} GB de ${(s.total_ram_mb / 1024).toFixed(0)} GB)`}
+              auto={s.auto_heap_mb}
+              total={s.total_ram_mb}
+              recommended={[4096, 8192]}
+              autoHint={`De ${(s.total_ram_mb / 1024).toFixed(0)} GB neste PC.`}
               onSave={(v) => save({ ram_mb: v })}
             />
-            <NumberSetting label="Salvar na nuvem a cada (min)" value={c.checkpoint_minutes} hint="Numa queda de luz, perde-se no máximo isso." onSave={(v) => save({ checkpoint_minutes: v })} />
-            <NumberSetting label="Tolerância ao sair (min)" value={c.grace_minutes} hint="Espera quem caiu voltar antes de fechar." onSave={(v) => save({ grace_minutes: v })} />
+            <ChoiceSetting
+              label="Salvar na nuvem a cada"
+              value={c.checkpoint_minutes}
+              options={[5, 10, 15]}
+              unit="min"
+              hint="Numa queda de luz, perde-se no máximo isso."
+              onSave={(v) => save({ checkpoint_minutes: v })}
+            />
+            <ChoiceSetting
+              label="Esperar quem caiu por"
+              value={c.grace_minutes}
+              options={[1, 2, 5, 10]}
+              unit="min"
+              hint="Antes de fechar o mundo, dá esse tempo para quem caiu voltar."
+              onSave={(v) => save({ grace_minutes: v })}
+            />
           </div>
         </Section>
 
@@ -133,7 +178,7 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
           />
         </Section>
 
-        <JournalSection s={s} reload={load} />
+        <JournalSection s={s} reload={load} isOwner={isOwner} toast={toast} />
 
         <Section title="O mundo sempre no ar">
           <Toggle
@@ -160,12 +205,6 @@ export default function SettingsPage({ status, isOwner, toast }: { status: Statu
               value={String(c.proxy_port)}
               hint={`Endereço: ${c.proxy_port === 25565 ? "localhost" : `localhost:${c.proxy_port}`}. Troque só se outro programa usar a 25565 (reinicie o app depois).`}
               onSave={(v) => save({ proxy_port: Number(v) || 25565 })}
-            />
-            <TextSetting
-              label="Salvamento automático (minutos)"
-              value={String(c.checkpoint_minutes)}
-              hint="Se o host cair, perde-se no máximo esse tempo."
-              onSave={(v) => save({ checkpoint_minutes: Number(v) || 5 })}
             />
           </div>
         </Section>
@@ -223,19 +262,87 @@ function TextSetting({ label, value, hint, onSave }: { label: string; value: str
   );
 }
 
-function NumberSetting({ label, value, hint, onSave }: { label: string; value: number; hint?: string; onSave: (v: number) => void }) {
-  const [v, setV] = useState(String(value));
-  useEffect(() => setV(String(value)), [value]);
+const gb = (mb: number) => `${(mb / 1024).toFixed(mb % 1024 === 0 ? 0 : 1).replace(".", ",")} GB`;
+
+/** Memória: "Automático (5 GB)" ou "Personalizado" com controle deslizante e a faixa recomendada. */
+function MemorySetting({
+  label,
+  value,
+  auto,
+  total,
+  recommended,
+  autoHint,
+  onSave,
+}: {
+  label: string;
+  value: number;
+  auto: number;
+  total: number;
+  recommended: [number, number];
+  autoHint: string;
+  onSave: (mb: number) => void;
+}) {
+  const max = Math.max(2048, Math.floor((total - 2048) / 512) * 512);
+  const [custom, setCustom] = useState(value > 0);
+  const [v, setV] = useState(value > 0 ? value : Math.min(auto, max));
+  useEffect(() => {
+    setCustom(value > 0);
+    setV(value > 0 ? value : Math.min(auto, max));
+  }, [value, auto, max]);
+  return (
+    <Field
+      label={label}
+      hint={custom ? `Recomendado: ${gb(recommended[0])} a ${gb(recommended[1])}. Mais que isso não deixa o jogo mais rápido.` : autoHint}
+    >
+      <select
+        className={inputCls}
+        value={custom ? "custom" : "auto"}
+        onChange={(e) => {
+          if (e.target.value === "auto") {
+            setCustom(false);
+            onSave(0);
+          } else setCustom(true);
+        }}
+      >
+        <option value="auto">Automático ({gb(auto)})</option>
+        <option value="custom">Personalizado</option>
+      </select>
+      {custom && (
+        <div className="mt-2.5 flex items-center gap-3">
+          <input
+            type="range"
+            min={2048}
+            max={max}
+            step={512}
+            value={v}
+            onChange={(e) => setV(Number(e.target.value))}
+            className="flex-1"
+            aria-label={label}
+          />
+          <span className="w-14 text-right tabular-nums text-[13px] font-semibold">{gb(v)}</span>
+          {v !== value && (
+            <Button variant="primary" className="h-8" onClick={() => onSave(v)}>
+              Salvar
+            </Button>
+          )}
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/** Opções prontas (ex.: 5 / 10 / 15 min). */
+function ChoiceSetting({ label, value, options, unit, hint, onSave }: { label: string; value: number; options: number[]; unit: string; hint?: string; onSave: (v: number) => void }) {
+  const all = options.includes(value) ? options : [...options, value].sort((a, b) => a - b);
   return (
     <Field label={label} hint={hint}>
-      <div className="flex gap-2">
-        <input className={inputCls} inputMode="numeric" value={v} onChange={(e) => setV(e.target.value.replace(/\D/g, ""))} />
-        {v !== String(value) && v !== "" && (
-          <Button variant="primary" onClick={() => onSave(Number(v))}>
-            Salvar
-          </Button>
-        )}
-      </div>
+      <select className={inputCls} value={value} onChange={(e) => onSave(Number(e.target.value))}>
+        {all.map((o) => (
+          <option key={o} value={o}>
+            {o} {unit}
+          </option>
+        ))}
+      </select>
     </Field>
   );
 }
@@ -259,12 +366,16 @@ function PathSetting({ label, value, directory, onSave }: { label: string; value
   );
 }
 
-function JournalSection({ s, reload }: { s: SettingsView; reload: () => void }) {
+function JournalSection({ s, reload, isOwner, toast }: { s: SettingsView; reload: () => void; isOwner: boolean; toast: ToastFn }) {
   const [js, setJs] = useState<JournalStatus | null>(null);
-  const { error, setError, run } = useAction();
+  const [webhook, setWebhook] = useState("");
+  const { busy, error, setError, run } = useAction();
   useEffect(() => {
     api.journalStatus().then(setJs).catch(() => {});
   }, [s]);
+  useEffect(() => {
+    if (isOwner) api.getPrivate().then((p) => setWebhook(p.discord_webhook ?? "")).catch(() => {});
+  }, [isOwner]);
   const cats = s.journal_categories;
   const setCat = (k: Category, on: boolean) => {
     const next = cats.map(([c, , v]) => [c, c === k ? on : v] as [Category, boolean]);
@@ -272,12 +383,39 @@ function JournalSection({ s, reload }: { s: SettingsView; reload: () => void }) 
   };
   return (
     <Section
-      title="Diário do mundo (Discord)"
+      title="Integrações: Discord (opcional)"
       aside={js && (js.pending > 0 || js.last_error || js.last_sent_at) ? <Pill tone={js.last_error ? "sun" : "moss"}>{js.last_error ? "com problema" : js.pending ? `${js.pending} na fila` : "em dia"}</Pill> : undefined}
     >
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {js?.last_error && <InfoNote tone="warn">{js.last_error}</InfoNote>}
-      <p className="text-[13px] text-ink-soft mb-1">O endereço do canal (webhook) é configurado pelo dono na aba Mundo e turma. Aqui você escolhe o que este PC publica quando hospeda.</p>
+      <p className="text-[13px] text-ink-soft mb-1">
+        O diário já aparece no app. Se quiser, ele também vai para um canal do Discord: quem entrou, mortes, conquistas e trocas de host.
+      </p>
+      {isOwner ? (
+        <div className="space-y-2 my-3">
+          <Field label="Webhook do canal (só o dono configura)" hint="Discord → Editar canal → Integrações → Webhooks → Copiar URL. Fica guardado só na nuvem do mundo.">
+            <input className={inputCls} value={webhook} placeholder="https://discord.com/api/webhooks/…" onChange={(e) => setWebhook(e.target.value)} />
+          </Field>
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              busy={busy === "wh"}
+              onClick={() => run("wh", async () => (await api.setWebhook(webhook), toast({ level: "success", title: "Discord configurado", body: "" })))}
+            >
+              Salvar
+            </Button>
+            <Button
+              disabled={!webhook}
+              busy={busy === "test"}
+              onClick={() => run("test", async () => (await api.testWebhook(webhook), toast({ level: "success", title: "Mensagem de teste enviada", body: "" })))}
+            >
+              Testar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-[12.5px] text-ink-muted">O canal é configurado pelo dono do mundo. Aqui você escolhe o que este PC publica quando hospeda.</p>
+      )}
       <p className="text-[12px] text-ink-muted mt-2 mb-1">Só o app de quem hospeda publica os eventos da sessão, então nada sai duplicado.</p>
       <div className="grid grid-cols-2 gap-x-8">
         {cats.map(([k, label, on]) => (

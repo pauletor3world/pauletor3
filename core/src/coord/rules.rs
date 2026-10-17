@@ -73,6 +73,17 @@ pub fn decide_acquire(
     AcquireDecision::Grant { previous: Some(l.clone()) }
 }
 
+/// Troca de host planejada só entre apps da mesma versão: durante a preferência de quem
+/// estava jogando, quem tem outra versão não assume uma vez que está sendo passada.
+/// Fora dessa janela (ou numa queda), qualquer versão pode abrir o mundo.
+pub fn handoff_version_conflict(now: DateTime<Utc>, lease: Option<&LeaseInfo>, requester: &str, app_version: &str) -> bool {
+    let Some(l) = lease else { return false };
+    if l.holder == requester || !l.handing_over || !is_expired(l, now) || l.app_version.is_empty() || app_version.is_empty() {
+        return false;
+    }
+    now < l.expires_at(ttl()) + Duration::seconds(FAILOVER_PREFERENCE_SECS) && l.app_version != app_version
+}
+
 /// Estado da vez visto de fora (expirada = livre, com a anterior para explicar).
 pub fn status(now: DateTime<Utc>, lease: Option<&LeaseInfo>) -> super::LeaseStatus {
     match lease {
@@ -173,5 +184,22 @@ mod tests {
         assert!(valid_nick("Ana_23"));
         assert!(!valid_nick("Zé"));
         assert!(!valid_nick("ab"));
+    }
+
+    #[test]
+    fn planned_handoff_only_between_same_app_version() {
+        let now = Utc::now();
+        let mut l = lease("a", now - Duration::seconds(LEASE_TTL_SECS));
+        l.app_version = "2.0.3".into();
+        l.handing_over = true;
+        assert!(handoff_version_conflict(now, Some(&l), "b", "2.1.0"));
+        assert!(!handoff_version_conflict(now, Some(&l), "b", "2.0.3"));
+        assert!(!handoff_version_conflict(now, Some(&l), "a", "2.1.0"), "o próprio PC retoma");
+        // depois da janela de preferência, qualquer versão abre o mundo
+        let later = now + Duration::seconds(FAILOVER_PREFERENCE_SECS + 1);
+        assert!(!handoff_version_conflict(later, Some(&l), "b", "2.1.0"));
+        // queda (sem passar o host) não bloqueia
+        l.handing_over = false;
+        assert!(!handoff_version_conflict(now, Some(&l), "b", "2.1.0"));
     }
 }

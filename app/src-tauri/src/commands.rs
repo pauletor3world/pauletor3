@@ -251,6 +251,8 @@ pub struct SettingsPatch {
     pub minecraft_dir: Option<String>,
     pub launcher_path: Option<String>,
     pub direct_launch: Option<bool>,
+    /// Versão da .minecraft para abrir o jogo ("" = vanilla do app).
+    pub client_version: Option<String>,
     /// 0 = automático
     pub ram_mb: Option<u64>,
     /// 0 = automático
@@ -264,6 +266,34 @@ pub struct SettingsPatch {
     pub wake_on_join: Option<bool>,
     pub background_replica: Option<bool>,
     pub journal: Option<Vec<(Category, bool)>>,
+}
+
+/// Versões do Minecraft que dá para abrir direto: o vanilla do app e as da .minecraft que são
+/// da versão do mundo (OptiFine, Fabric, Quilt).
+#[tauri::command]
+pub async fn client_versions(state: State<'_, AppState>) -> CmdResult<Vec<machencraft_core::instancias::ClientVersion>> {
+    let e = engine(&state)?;
+    let mc = e.config.read().await.minecraft_dir.clone();
+    let minecraft = e.world_minecraft_version().await;
+    Ok(machencraft_core::instancias::list(mc.as_deref(), &minecraft))
+}
+
+/// "Restaurar como cópia": a versão vira um mundo de single-player.
+#[tauri::command]
+pub async fn restore_copy(state: State<'_, AppState>, manifest_id: String) -> CmdResult<String> {
+    Ok(engine(&state)?.restore_as_copy(manifest_id).await?)
+}
+
+/// "Nosso Mundo em números" (estatísticas do próprio Minecraft).
+#[tauri::command]
+pub async fn world_numbers(state: State<'_, AppState>) -> CmdResult<machencraft_core::numeros::Numeros> {
+    Ok(engine(&state)?.numeros())
+}
+
+/// "Chamar pro jogo" um membro do grupo.
+#[tauri::command]
+pub async fn call_member(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    Ok(engine(&state)?.chamar(&id).await?)
 }
 
 #[tauri::command]
@@ -286,6 +316,9 @@ pub async fn save_settings(state: State<'_, AppState>, patch: SettingsPatch) -> 
         }
         if let Some(v) = patch.launcher_path {
             c.launcher_path = (!v.is_empty()).then(|| v.into());
+        }
+        if let Some(v) = patch.client_version.clone() {
+            c.client_version = (!v.is_empty()).then_some(v);
         }
         if let Some(v) = patch.direct_launch {
             c.direct_launch = v;
@@ -390,6 +423,15 @@ pub async fn console_history(state: State<'_, AppState>) -> CmdResult<Vec<String
     Ok(state.console.lock().unwrap().iter().cloned().collect())
 }
 
+/// Fim do console da última sessão hospedada neste PC (para o Console vazio).
+#[tauri::command]
+pub async fn last_session_log(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
+    let e = engine(&state)?;
+    let text = std::fs::read(e.paths.logs().join("servidor-console.log")).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    Ok(lines[lines.len().saturating_sub(crate::CONSOLE_LINES)..].to_vec())
+}
+
 #[tauri::command]
 pub async fn detect_launchers() -> CmdResult<Vec<LauncherCandidate>> {
     Ok(launcher::detect())
@@ -453,42 +495,3 @@ pub async fn hide_window(app: AppHandle) -> CmdResult<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
-pub struct UpdateInfo {
-    pub version: String,
-    pub notes: Option<String>,
-}
-
-/// Procura atualização no Worker do dono (só membros do mundo baixam).
-#[tauri::command]
-pub async fn update_check(app: AppHandle, state: State<'_, AppState>) -> CmdResult<Option<UpdateInfo>> {
-    use tauri_plugin_updater::UpdaterExt;
-    let e = engine(&state)?;
-    let (url, headers) = match e.updater_endpoint().await {
-        Ok(x) => x,
-        Err(_) => return Ok(None),
-    };
-    let url = url.parse().map_err(|err| CmdError::msg("Endereço de atualização inválido", format!("{err}")))?;
-    let mut b = app.updater_builder().endpoints(vec![url]).map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
-    for (k, v) in headers {
-        b = b.header(k, v).map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
-    }
-    let up = b.build().map_err(|err| CmdError::msg("Atualização", err.to_string()))?;
-    let found = up.check().await.map_err(|err| CmdError::msg("Não consegui procurar atualização", err.to_string()))?;
-    let info = found.as_ref().map(|u| UpdateInfo { version: u.version.clone(), notes: u.body.clone() });
-    *state.update.lock().await = found;
-    Ok(info)
-}
-
-#[tauri::command]
-pub async fn update_install(app: AppHandle, state: State<'_, AppState>) -> CmdResult<()> {
-    let e = engine(&state)?;
-    if e.is_hosting().await {
-        return Err(CmdError::msg("Feche a sessão antes de atualizar", "A atualização reinicia o app."));
-    }
-    let Some(u) = state.update.lock().await.take() else {
-        return Err(CmdError::msg("Nenhuma atualização pendente", "Procure de novo."));
-    };
-    u.download_and_install(|_, _| {}, || {}).await.map_err(|err| CmdError::msg("A atualização falhou", err.to_string()))?;
-    app.restart();
-}

@@ -1,9 +1,9 @@
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, Crown, Link2, MessageCircle, Send, ShieldCheck, Trash2, UserMinus, UserPlus } from "lucide-react";
+import { Check, Copy, Crown, Link2, MessageCircle, Trash2, UserMinus, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Avatar } from "../components/Avatar";
-import { Button, Card, CardTitle, Empty, ErrorBanner, Field, InfoNote, Modal, PageHeader, Pill, Toggle, cx, inputCls } from "../components/ui";
+import { Button, Card, CardTitle, Empty, ErrorBanner, Modal, PageHeader, Pill, Toggle, cx } from "../components/ui";
 import { api } from "../lib/api";
 import { ago, dateTime } from "../lib/format";
 import { useAction, type Toast } from "../lib/hooks";
@@ -15,15 +15,15 @@ export default function World({ status, toast }: { status: Status | null; toast:
   const owner = !!status?.is_owner;
   const { busy, error, setError, run } = useAction();
   const [link, setLink] = useState<string | null>(null);
-  const [needApproval, setNeedApproval] = useState(false);
+  // padrão seguro: o dono aprova quem entra e o link vale para uma pessoa só
+  const [needApproval, setNeedApproval] = useState(true);
+  const [single, setSingle] = useState(true);
   const [invites, setInvites] = useState<Invite[]>([]);
-  const [webhook, setWebhook] = useState("");
   const [removing, setRemoving] = useState<MemberView | null>(null);
 
   const load = useCallback(() => {
     if (!owner) return;
     api.invites().then(setInvites).catch(() => {});
-    api.getPrivate().then((p) => setWebhook(p.discord_webhook ?? "")).catch(() => {});
   }, [owner]);
   useEffect(load, [load]);
 
@@ -33,7 +33,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
 
   const newInvite = () =>
     run("invite", async () => {
-      const l = await api.makeInvite(48, 5, needApproval);
+      const l = await api.makeInvite(48, single ? 1 : 5, needApproval);
       setLink(l);
       load();
     });
@@ -41,7 +41,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
   const copy = async () => {
     if (!link) return;
     await writeText(link);
-    toast({ level: "success", title: "Link copiado", body: "Mande para os amigos. Vale por 48 horas." });
+    toast({ level: "success", title: "Link copiado", body: single ? "Vale para uma pessoa, por 48 horas." : "Vale para até 5 pessoas, por 48 horas." });
   };
 
   const whatsapp = () => {
@@ -52,7 +52,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
 
   return (
     <div className="space-y-5">
-      <PageHeader title="O mundo e a turma" subtitle={owner ? "Convide, aprove e cuide de quem entra." : "Quem faz parte deste mundo."} />
+      <PageHeader title="O grupo" subtitle={owner ? "Convide, aprove e cuide de quem entra." : "Quem faz parte deste mundo."} />
       <ErrorBanner error={error} onClose={() => setError(null)} />
 
       {owner && (
@@ -81,11 +81,14 @@ export default function World({ status, toast }: { status: Status | null; toast:
                 </div>
               </div>
             ) : (
-              <div className="flex items-end justify-between gap-4 flex-wrap">
-                <Toggle checked={needApproval} onChange={setNeedApproval} label="Eu aprovo quem entrar" hint="Desligado: quem tiver o link entra direto." />
-                <Button variant="primary" icon={<UserPlus className="size-4" />} busy={busy === "invite"} onClick={newInvite}>
-                  Gerar link de convite
-                </Button>
+              <div className="space-y-1">
+                <Toggle checked={needApproval} onChange={setNeedApproval} label="Eu aprovo quem entrar" hint="Recomendado. Desligado, quem tiver o link entra direto." />
+                <Toggle checked={single} onChange={setSingle} label="Link para uma pessoa só" hint="Recomendado. Desligado, o mesmo link vale para até 5 pessoas." />
+                <div className="flex justify-end pt-2">
+                  <Button variant="primary" icon={<UserPlus className="size-4" />} busy={busy === "invite"} onClick={newInvite}>
+                    Gerar link de convite
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -143,7 +146,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
       </Card>
 
       {owner && (
-        <div className="grid grid-cols-2 gap-5">
+        <div>
           <Card>
             <CardTitle>Convites ativos</CardTitle>
             <div className="px-5 pb-5">
@@ -174,36 +177,6 @@ export default function World({ status, toast }: { status: Status | null; toast:
             </div>
           </Card>
 
-          <Card>
-            <CardTitle>Diário no Discord (opcional)</CardTitle>
-            <div className="px-5 pb-5 space-y-3">
-              <p className="text-[13px] text-ink-soft">
-                O diário já aparece aqui no app. Se quiser, ele também vai para um canal do Discord: quem entrou, mortes, conquistas e trocas de host.
-              </p>
-              <Field label="Webhook do canal" hint="Discord → Editar canal → Integrações → Webhooks → Copiar URL.">
-                <input className={inputCls} value={webhook} placeholder="https://discord.com/api/webhooks/…" onChange={(e) => setWebhook(e.target.value)} />
-              </Field>
-              <div className="flex gap-2">
-                <Button
-                  variant="primary"
-                  icon={<ShieldCheck className="size-4" />}
-                  busy={busy === "wh"}
-                  onClick={() => run("wh", async () => (await api.setWebhook(webhook), toast({ level: "success", title: "Diário configurado", body: "" })))}
-                >
-                  Salvar
-                </Button>
-                <Button
-                  icon={<Send className="size-4" />}
-                  disabled={!webhook}
-                  busy={busy === "test"}
-                  onClick={() => run("test", async () => (await api.testWebhook(webhook), toast({ level: "success", title: "Mensagem de teste enviada", body: "" })))}
-                >
-                  Testar
-                </Button>
-              </div>
-              <InfoNote>O endereço fica guardado só na nuvem do mundo; os amigos não precisam configurar nada.</InfoNote>
-            </div>
-          </Card>
         </div>
       )}
 
@@ -229,7 +202,7 @@ export default function World({ status, toast }: { status: Status | null; toast:
           </>
         }
       >
-        O app dele perde o acesso ao mundo na hora. O progresso dele no jogo continua salvo no mundo; se ele voltar por um convite novo, continua de onde parou.
+        O app dele perde o acesso ao mundo na hora. O inventário e o progresso dele ficam guardados no mundo: ele pode voltar com um convite novo e continua de onde parou.
       </Modal>
     </div>
   );

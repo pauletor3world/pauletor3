@@ -62,7 +62,7 @@ export function PageHeader({ title, subtitle, aside }: { title: string; subtitle
   return (
     <header className="flex items-end justify-between gap-6 mb-7">
       <div className="min-w-0">
-        <h1 className="font-display text-[48px] leading-[0.9] text-ink">{title}</h1>
+        <h1 className="text-[34px] font-extrabold tracking-tight leading-[1.05] text-ink">{title}</h1>
         {subtitle && <p className="text-ink-muted mt-2.5 text-[14px] max-w-[60ch]">{subtitle}</p>}
       </div>
       {aside && <div className="shrink-0">{aside}</div>}
@@ -86,7 +86,7 @@ export function Pill({ tone = "muted", children }: { tone?: Tone; children: Reac
 
 /** Ponto de estado: aceso (no ar), trabalhando, problema ou apagado. */
 export function Dot({ tone, className }: { tone: "live" | "busy" | "warn" | "free"; className?: string }) {
-  const c = { live: "bg-moss-400 animate-breathe", busy: "bg-sky-400 animate-breathe", warn: "bg-ember-400", free: "bg-ink-faint" }[tone];
+  const c = { live: "bg-moss-400 animate-breathe", busy: "bg-sky-400 animate-breathe", warn: "bg-ember-400", free: "bg-[#7d8fd6]" }[tone];
   return <span className={cx("size-2 rounded-[2px] shrink-0", c, className)} />;
 }
 

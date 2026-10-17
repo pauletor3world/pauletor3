@@ -3197,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "machencraft-app"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "machencraft-core"
-version = "2.0.4"
+version = "2.1.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -3243,6 +3243,7 @@ dependencies = [
  "rand 0.8.8",
  "regex",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "sha1",

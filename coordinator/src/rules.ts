@@ -82,6 +82,17 @@ export function decideAcquire(
   return { kind: "grant", previous: lease };
 }
 
+/**
+ * Troca de host planejada só entre apps da mesma versão: durante a preferência de quem estava
+ * jogando, quem tem outra versão não assume uma vez que está sendo passada. Fora dessa janela
+ * (ou numa queda), qualquer versão pode abrir o mundo.
+ */
+export function handoffVersionConflict(now: number, lease: LeaseInfo | null, requester: string, appVersion: string): boolean {
+  if (!lease || lease.holder === requester || !lease.handing_over || !isExpired(lease, now)) return false;
+  if (!lease.app_version || !appVersion) return false;
+  return now < expiresAt(lease) + FAILOVER_PREFERENCE_MS && lease.app_version !== appVersion;
+}
+
 export function leaseStatus(now: number, lease: LeaseInfo | null): LeaseStatus {
   if (!lease) return { kind: "free", previous: null };
   if (isExpired(lease, now)) return { kind: "free", previous: lease };

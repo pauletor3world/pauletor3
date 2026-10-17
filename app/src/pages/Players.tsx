@@ -1,4 +1,4 @@
-import { Link2, Users } from "lucide-react";
+import { ChevronDown, ChevronRight, Link2, Sparkles, Users } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Avatar } from "../components/Avatar";
 import { Button, Card, Empty, ErrorBanner, InfoNote, Modal, PageHeader, Pill, inputCls } from "../components/ui";
@@ -30,6 +30,23 @@ export default function Players({ status, toast }: { status: Status | null; toas
   useEffect(load, [load]);
 
   const free = status?.lease?.kind === "free" && !status.me_hosting;
+  const [showOrphans, setShowOrphans] = useState(false);
+  const identified = (players ?? []).filter((p) => p.nick);
+  const orphans = (players ?? []).filter((p) => !p.nick);
+  // Sugestão de dono: mesma posição de alguém já identificado, ou o único membro sem progresso.
+  const members = (status?.members ?? []).filter((m) => m.approved).map((m) => m.nick);
+  const semProgresso = members.filter((n) => !identified.some((p) => p.nick?.toLowerCase() === n.toLowerCase()));
+  const suggest = (p: WorldPlayer): { nick: string; why: string } | null => {
+    if (p.pos) {
+      const near = identified.find(
+        (q) => q.pos && q.dimension === p.dimension && Math.hypot(q.pos[0] - p.pos![0], q.pos[1] - p.pos![1], q.pos[2] - p.pos![2]) < 8,
+      );
+      if (near?.nick) return { nick: near.nick, why: `está no mesmo lugar que ${near.nick} (${p.pos.join(", ")})` };
+    }
+    if (semProgresso.length === 1 && orphans.length === 1) return { nick: semProgresso[0], why: `${semProgresso[0]} é o único do grupo ainda sem progresso` };
+    return null;
+  };
+  const sugestoes = orphans.map((p) => ({ p, s: suggest(p) })).filter((x) => x.s);
 
   const migrate = async () => {
     const t = target;
@@ -45,22 +62,73 @@ export default function Players({ status, toast }: { status: Status | null; toas
 
   return (
     <div>
-      <PageHeader title="Jogadores do mundo" subtitle="Ligue o progresso antigo de cada pessoa ao nick que ela usa." />
+      <PageHeader title="Jogadores do mundo" subtitle="Quem já tem progresso no mundo, e o progresso que ainda não tem dono." />
       <div className="space-y-4">
-        <InfoNote>
-          O servidor reconhece cada pessoa pelo <b className="text-ink">nick</b>. Progresso salvo em single-player ou com conta logada fica num identificador diferente (marcado como{" "}
-          <b className="text-ink">conta com login</b>). Vincule ao nick certo antes de jogar, senão a pessoa entra sem inventário. Nada é apagado.
-        </InfoNote>
         {!free && <InfoNote tone="warn">Para vincular progresso, ninguém pode estar hospedando.</InfoNote>}
         <ErrorBanner error={error} onClose={() => setError(null)} />
+
+        {/* assistente: só aparece quando há algo para vincular */}
+        {sugestoes.length > 0 && (
+          <Card className="p-5 space-y-3 ring-1 ring-sun-400/25">
+            <div className="flex items-center gap-2 font-bold">
+              <Sparkles className="size-4 text-sun-400" /> Achamos progresso que parece ter dono
+            </div>
+            {sugestoes.map(({ p, s }) => (
+              <div key={p.uuid} className="flex items-center gap-3 flex-wrap">
+                <div className="flex-1 min-w-0 text-[13.5px]">
+                  Isso parece ser de <b className="text-ink">{s!.nick}</b>: {s!.why}. Nível {p.xp_level}, {p.items} itens.
+                </div>
+                <Button
+                  variant="sun"
+                  icon={<Link2 className="size-4" />}
+                  disabled={!free}
+                  onClick={() => {
+                    setNick(s!.nick);
+                    setTarget(p);
+                  }}
+                >
+                  Vincular a {s!.nick}
+                </Button>
+              </div>
+            ))}
+          </Card>
+        )}
+
+        <h3 className="text-[13px] font-semibold text-ink-muted px-1">Identificados</h3>
         <Card className="divide-y divide-white/[0.05]">
           {players === null && !error && <div className="h-40 animate-pulse" />}
-          {players && players.length === 0 && (
-            <Empty icon={<Users className="size-6" />} title="Nenhum jogador salvo no mundo">
-              Quem entrar no servidor aparece aqui.
+          {players && identified.length === 0 && (
+            <Empty icon={<Users className="size-6" />} title="Ninguém identificado ainda">
+              Quem entrar no servidor aparece aqui, pelo nick.
             </Empty>
           )}
-          {players?.map((p) => (
+          {identified.map((p) => (
+            <div key={p.uuid} className="flex items-center gap-4 px-5 py-3.5">
+              <Avatar name={p.nick ?? p.uuid} size={36} />
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold">{p.nick}</div>
+                <div className="text-[12.5px] text-ink-muted mt-0.5">
+                  Último acesso {ago(p.last_played)} · nível {p.xp_level} · {p.items} itens · {dim[p.dimension] ?? p.dimension}
+                </div>
+              </div>
+            </div>
+          ))}
+        </Card>
+
+        {orphans.length > 0 && (
+          <div>
+            <button onClick={() => setShowOrphans((v) => !v)} className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-muted hover:text-ink cursor-pointer px-1 py-1">
+              {showOrphans ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />} Progresso sem dono ({orphans.length})
+            </button>
+            {showOrphans && (
+        <Card className="divide-y divide-white/[0.05] mt-2">
+          <div className="px-5 py-3">
+            <InfoNote>
+              Progresso de single-player ou de conta com login fica guardado com outro identificador. Vincule ao nick certo e a pessoa entra com inventário, posição e conquistas.
+              Nada é apagado.
+            </InfoNote>
+          </div>
+          {orphans.map((p) => (
             <div key={p.uuid} className="flex items-center gap-4 px-5 py-3.5">
               <Avatar name={p.nick ?? p.uuid} size={36} />
               <div className="flex-1 min-w-0">
@@ -74,12 +142,15 @@ export default function Players({ status, toast }: { status: Status | null; toas
                   {p.pos ? ` (${p.pos.join(", ")})` : ""}
                 </div>
               </div>
-              <Button variant={p.uuid_version === 4 ? "sun" : "ghost"} icon={<Link2 className="size-4" />} disabled={!free} onClick={() => setTarget(p)}>
+              <Button variant="ghost" icon={<Link2 className="size-4" />} disabled={!free} onClick={() => setTarget(p)}>
                 Vincular a um nick
               </Button>
             </div>
           ))}
         </Card>
+            )}
+          </div>
+        )}
       </div>
       <Modal
         open={!!target}

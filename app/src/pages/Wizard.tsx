@@ -125,7 +125,7 @@ export default function Wizard({ onDone }: { onDone: () => void }) {
 function StepHeader({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <div className="mb-8">
-      <h1 className="font-display text-[50px] leading-[0.92]">{title}</h1>
+      <h1 className="text-[36px] font-extrabold tracking-tight leading-[1.05]">{title}</h1>
       {children && <div className="text-ink-soft mt-3 text-[15px] leading-relaxed max-w-[60ch]">{children}</div>}
     </div>
   );
@@ -175,7 +175,7 @@ function Welcome({ role, setRole, next, hasInvite }: { role: Role; setRole: (r: 
   return (
     <div>
       <StepHeader title="Um mundo de survival que nunca dorme">
-        O mundo fica nos PCs da turma e numa cópia protegida na nuvem. Quem clica em <b className="text-ink">Jogar</b> vira o servidor; se essa pessoa sair, outro amigo assume
+        O mundo fica nos PCs do grupo e numa cópia protegida na nuvem. Quem clica em <b className="text-ink">Jogar</b> vira o servidor; se essa pessoa sair, outro amigo assume
         sozinho. Ninguém paga host nem mexe em rede.
       </StepHeader>
       {hasInvite && (
@@ -185,7 +185,7 @@ function Welcome({ role, setRole, next, hasInvite }: { role: Role; setRole: (r: 
       )}
       <div className="grid grid-cols-2 gap-3">
         <RoleCard active={role === "friend"} onClick={() => setRole("friend")} icon={<Ticket className="size-5" />} title="Recebi um convite" text="Um amigo me mandou um link. Leva 2 minutos." />
-        <RoleCard active={role === "owner"} onClick={() => setRole("owner")} icon={<Crown className="size-5" />} title="Vou criar o mundo" text="Eu publiquei a coordenação e vou trazer o mundo para a turma." />
+        <RoleCard active={role === "owner"} onClick={() => setRole("owner")} icon={<Crown className="size-5" />} title="Vou criar o mundo" text="Eu publiquei a coordenação e vou trazer o mundo para o grupo." />
       </div>
       <Nav next={next} />
     </div>
@@ -380,7 +380,7 @@ function WorldStep({ next, back }: { next: () => void; back: () => void }) {
   };
   return (
     <div>
-      <StepHeader title="Criar o mundo da turma">
+      <StepHeader title="Criar o mundo do grupo">
         Use o endereço e a chave que o script <code className="font-mono text-[13px] text-sun-300">publicar-coordenacao.ps1</code> mostrou no final (ficam também no arquivo que ele salvou).
       </StepHeader>
       <div className="space-y-5">
@@ -449,7 +449,7 @@ function InviteOut({ next }: { next: () => void }) {
   }, [run]);
   return (
     <div>
-      <StepHeader title="Chame a turma">
+      <StepHeader title="Chame o grupo">
         Mande este link para os amigos. Eles abrem no PC, baixam o app e entram — <b className="text-ink">sem conta e sem configurar nada</b>. Vale por 48 horas e 5 pessoas; dá para gerar
         outros depois na aba Mundo.
       </StepHeader>
@@ -494,9 +494,9 @@ function Done({ onDone, owner }: { onDone: () => void; owner: boolean }) {
   return (
     <div className="text-center pt-8">
       <img src="/logo.png" alt="" className={cx("mx-auto size-28 mb-6", phase !== "ok" && "animate-pulse")} draggable={false} />
-      <h1 className="font-display text-[60px] leading-none">Tudo pronto</h1>
+      <h1 className="text-[42px] font-extrabold tracking-tight leading-none">Tudo pronto</h1>
       <p className="text-ink-soft mt-4 max-w-[470px] mx-auto leading-relaxed">
-        {owner ? "Seu mundo está na nuvem e a turma já pode entrar pelo convite." : "Você faz parte do mundo."} Clique em <b className="text-ink">Jogar</b>: se alguém estiver
+        {owner ? "Seu mundo está na nuvem e o grupo já pode entrar pelo convite." : "Você faz parte do mundo."} Clique em <b className="text-ink">Jogar</b>: se alguém estiver
         hospedando, você entra direto; se não, o mundo acorda no seu PC. No Minecraft, o mundo aparece no Multiplayer como <b className="text-ink">pAuletOr 3</b>.
       </p>
       <p className="text-[13px] text-ink-muted mt-3">O app abre com o Windows, discreto na bandeja, para manter sua cópia do mundo em dia.</p>

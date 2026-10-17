@@ -6,7 +6,7 @@
 // POST /v1/join/:token                          entra por convite
 // *    /v1/worlds/:w/...                        operações do mundo (só membros)
 
-import { downloadForInvite, publishInstaller, updater } from "./app-dist";
+import { compareVersions, downloadForInvite, minVersion, publishInstaller, setMinVersion, updater } from "./app-dist";
 import { AuthError, randomId, safeEqual, verifyRequest } from "./auth";
 import { blobStore } from "./blobs";
 import { invitePage } from "./invite-page";
@@ -29,6 +29,8 @@ export interface Env {
   /** Cota da nuvem por mundo, em bytes. */
   QUOTA_BYTES?: string;
   MAX_MEMBERS?: string;
+  /** Versão mínima do app (reserva; o dono define a valer com PUT /v1/app/versao-minima). */
+  VERSAO_MINIMA?: string;
 }
 
 const json = (v: unknown, status = 200) =>
@@ -103,7 +105,10 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
   }
 
   // o dono publica uma versão do app
-  if (p === "/v1/app/installer" && req.method === "PUT") return publishInstaller(req, env);
+  if (p === "/v1/app/installer" && req.method === "PUT") return publishInstaller(req, env, url);
+  // o dono define a versão mínima do app (sem publicar app novo)
+  if (p === "/v1/app/versao-minima" && req.method === "PUT") return setMinVersion(req, env);
+  if (p === "/v1/app/versao-minima" && req.method === "GET") return json({ versao_minima: await minVersion(env) });
 
   // criar mundo
   if (p === "/v1/worlds" && req.method === "POST") {
@@ -182,11 +187,22 @@ async function route(req: Request, env: Env, url: URL): Promise<Response> {
 
   switch (`${method} ${rest.replace(/\?.*$/, "")}`) {
     case "GET view":
-      return json(await w.view(id));
+      return json({ ...(await w.view(id)), versao_minima: await minVersion(env) });
     case "POST presence":
-      return json(await w.presence(id, await bodyJson(s.body)));
-    case "POST lease/acquire":
-      return json(await w.acquire(id, await bodyJson(s.body)));
+      return json({ ...(await w.presence(id, await bodyJson(s.body))), versao_minima: await minVersion(env) });
+    case "POST lease/acquire": {
+      const b = await bodyJson<{ app_version?: string }>(s.body);
+      const minima = await minVersion(env);
+      // abaixo da versão mínima: não hospeda (o app também bloqueia; aqui é a garantia)
+      if (minima && compareVersions(String(b.app_version ?? ""), minima) < 0) {
+        throw new ApiError(409, "app_outdated", "atualize o app para hospedar", { versao_minima: minima });
+      }
+      return json(await w.acquire(id, b));
+    }
+    case "POST call": {
+      const b = await bodyJson<{ to: string }>(s.body);
+      return json(await w.call(id, String(b.to ?? "")));
+    }
     case "POST lease/heartbeat": {
       const b = await bodyJson<{ session_number: number; online: string[]; handing_over: boolean }>(s.body);
       return json(await w.heartbeat(id, b.session_number, b.online, b.handing_over));

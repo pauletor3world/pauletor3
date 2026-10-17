@@ -3,6 +3,8 @@ import type {
   AppInfo,
   Category,
   Check,
+  ClientVersion,
+  WorldNumbers,
   DiaryEvent,
   HumanError,
   Invite,
@@ -50,6 +52,7 @@ export const api = {
     minecraft_dir?: string;
     launcher_path?: string;
     direct_launch?: boolean;
+    client_version?: string;
     ram_mb?: number;
     client_ram_mb?: number;
     checkpoint_minutes?: number;
@@ -72,7 +75,12 @@ export const api = {
   saveWorldSettings: (settings: WorldSettings) => invoke<void>("save_world_settings", { settings }),
   consoleCmd: (command: string) => invoke<string>("console_cmd", { command }),
   consoleHistory: () => invoke<string[]>("console_history"),
+  lastSessionLog: () => invoke<string[]>("last_session_log"),
   detectLaunchers: () => invoke<LauncherCandidate[]>("detect_launchers"),
+  clientVersions: () => invoke<ClientVersion[]>("client_versions"),
+  callMember: (id: string) => invoke<void>("call_member", { id }),
+  restoreCopy: (manifestId: string) => invoke<string>("restore_copy", { manifestId }),
+  worldNumbers: () => invoke<WorldNumbers>("world_numbers"),
   openLauncher: () => invoke<void>("open_launcher"),
   worldPlayers: () => invoke<WorldPlayer[]>("world_players"),
   migratePlayer: (uuid: string, nick: string) => invoke<unknown>("migrate_player", { uuid, nick }),
@@ -83,8 +91,6 @@ export const api = {
     ),
   journalStatus: () => invoke<JournalStatus>("journal_status"),
   testWebhook: (url?: string) => invoke<void>("test_webhook", { url }),
-  updateCheck: () => invoke<{ version: string; notes: string | null } | null>("update_check"),
-  updateInstall: () => invoke<void>("update_install"),
   quit: () => invoke<void>("quit_app"),
   hideWindow: () => invoke<void>("hide_window"),
 

@@ -184,6 +184,19 @@ pub struct WorldView {
     pub now: DateTime<Utc>,
     /// O app que pediu é dono?
     pub me: Option<Member>,
+    /// Versão mínima do app para jogar com o grupo (definida pelo dono na coordenação).
+    #[serde(default)]
+    pub versao_minima: Option<String>,
+    /// Um amigo chamou este PC pro jogo ("Chamar pro jogo"); vem uma vez só.
+    #[serde(default)]
+    pub chamado: Option<Chamado>,
+}
+
+/// "Fulano está te chamando pro jogo".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Chamado {
+    pub de: String,
+    pub em: DateTime<Utc>,
 }
 
 impl WorldView {
@@ -256,6 +269,8 @@ pub trait Coordinator: Send + Sync {
     /// Configurações privadas do mundo (ex.: webhook do Discord). Membros aprovados leem.
     async fn private_settings(&self) -> NmResult<PrivateSettings>;
     async fn set_private_settings(&self, s: &PrivateSettings) -> NmResult<()>;
+    /// Chama um membro pro jogo (o app dele avisa na próxima presença).
+    async fn call(&self, to: &str) -> NmResult<()>;
 }
 
 /// Configurações guardadas na coordenação, visíveis só para membros aprovados.

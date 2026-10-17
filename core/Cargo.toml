@@ -50,6 +50,7 @@ regex = "1"
 clap = { version = "4", features = ["derive"] }
 hostname = "0.4"
 iroh = "1.3"
+semver = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

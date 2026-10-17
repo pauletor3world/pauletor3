@@ -15,3 +15,7 @@ app/src-tauri/gen/
 .npmrc
 app/.npmrc
 *.tsbuildinfo
+
+# Chave privada de assinatura das atualizações: NUNCA no repositório
+*.key
+senha-da-chave.txt

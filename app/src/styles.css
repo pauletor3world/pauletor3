@@ -76,6 +76,56 @@
   accent-color: var(--color-sun-400);
 }
 
+/* Contraste (WCAG AA): o cinza do texto secundário sobre o azul-marinho fica mais claro. */
+:root {
+  --color-ink-muted: #9aa6c4;
+  --color-ink-faint: #74819f;
+}
+
+/* ---------------------------------------------------------------- tema claro */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-night-950: #e6ebf4;
+  --color-night-900: #f2f5fa;
+  --color-night-850: #ffffff;
+  --color-night-800: #ffffff;
+  --color-night-700: #e4e9f2;
+  --color-night-600: #ccd5e4;
+  --color-night-500: #aeb9cf;
+  --color-ink: #121c31;
+  --color-ink-soft: #2f3c57;
+  --color-ink-muted: #4f5c78;
+  --color-ink-faint: #6b7792;
+  --color-sun-300: #8a5300;
+  --color-moss-300: #2c6e22;
+  --color-sky-300: #24609e;
+  --color-dusk-300: #a84a1b;
+  --color-ember-400: #b8382a;
+  --shadow-card: 0 1px 2px rgb(18 28 49 / 0.06), 0 12px 28px -18px rgb(18 28 49 / 0.25);
+  --shadow-pop: 0 24px 60px -24px rgb(18 28 49 / 0.35);
+}
+:root[data-theme="light"] .sky {
+  background: linear-gradient(180deg, #eaf0f9 0%, var(--color-night-900) 55%, #f5ede6 100%);
+}
+:root[data-theme="light"] [class*="ring-white/"] {
+  --tw-ring-color: rgb(18 28 49 / 0.1);
+}
+:root[data-theme="light"] [class*="border-white/"],
+:root[data-theme="light"] [class*="divide-white/"] > * + * {
+  border-color: rgb(18 28 49 / 0.09);
+}
+:root[data-theme="light"] nav[class*="bg-night-950/"] {
+  background-color: rgb(255 255 255 / 0.7);
+}
+/* A cena e o que fica sobre ela continuam escuros nos dois temas. */
+:root[data-theme="light"] .scene {
+  color: #eef2fa;
+  --color-ink: #eef2fa;
+  --color-ink-soft: #d6deef;
+  --color-ink-muted: #b5c0da;
+  --color-night-950: #060c1b;
+}
+
 html,
 body,
 #root {
@@ -185,6 +235,60 @@ body {
 @keyframes scene-in {
   from { opacity: 0; filter: blur(8px) saturate(0.6); transform: scale(1.04); }
   to { opacity: 1; filter: none; transform: none; }
+}
+
+/* Clima da cena: noite (mundo dormindo), amanhecer (abrindo/trocando), dia (aberto). */
+.scene-tint {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: background-color 1.2s ease, opacity 1.2s ease;
+}
+.scene-art > img {
+  transition: filter 1.2s ease;
+}
+.scene-night .scene-art > img {
+  filter: brightness(0.62) saturate(0.7);
+}
+.scene-night .scene-tint {
+  background: rgb(24 36 96 / 0.55);
+  mix-blend-mode: multiply;
+}
+.scene-dawn .scene-tint {
+  background: rgb(255 150 120 / 0.1);
+  mix-blend-mode: screen;
+}
+.scene-day .scene-art > img {
+  filter: brightness(1.08) saturate(1.08);
+}
+.scene-day .scene-tint {
+  background: linear-gradient(180deg, rgb(120 190 255 / 0.55) 0%, rgb(160 210 255 / 0.25) 45%, transparent 70%);
+  mix-blend-mode: soft-light;
+}
+/* Fumaça na chaminé: um amigo está com o mundo aberto. */
+.scene-smoke {
+  position: absolute;
+  left: 51.2%;
+  top: 63.6%;
+  width: 1%;
+  height: 1%;
+}
+.scene-smoke i {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 0.55vw;
+  height: 0.55vw;
+  min-width: 5px;
+  min-height: 5px;
+  background: rgb(235 238 245 / 0.85);
+  animation: smoke 3.6s steps(9, end) infinite;
+}
+.scene-smoke i:nth-child(2) { animation-delay: -1.2s; }
+.scene-smoke i:nth-child(3) { animation-delay: -2.4s; }
+@keyframes smoke {
+  0% { transform: translate(0, 0) scale(1); opacity: 0.9; }
+  100% { transform: translate(14px, -46px) scale(1.9); opacity: 0; }
 }
 
 /* Janelas da casa (posições exatas, em % da arte 1920x1080). */

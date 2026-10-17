@@ -1,6 +1,7 @@
 //! App desktop do Machen Craft (Tauri 2). Toda a lógica mora no `machencraft-core`;
 //! aqui ficam a ponte com a interface, a bandeja, as notificações e o ciclo de vida da janela.
 
+mod atualizacao;
 mod commands;
 mod setup;
 mod tray;
@@ -28,8 +29,8 @@ pub struct AppState {
     pub start_minimized: bool,
     /// Convite recebido por link (`machencraft://entrar/...`) esperando o assistente.
     pub pending_invite: Mutex<Option<String>>,
-    /// Atualização encontrada, esperando o "Atualizar agora".
-    pub update: tokio::sync::Mutex<Option<tauri_plugin_updater::Update>>,
+    /// Serviço de atualização do app (procura, baixa e instala no momento seguro).
+    pub atualizacao: atualizacao::Servico,
     log_guard: Mutex<Option<tracing_appender_guard::Guard>>,
 }
 
@@ -75,8 +76,9 @@ fn event_sink(app: AppHandle) -> EventSink {
                 if let Some(engine) = app.state::<AppState>().engine() {
                     let st = engine.status();
                     #[cfg(windows)]
-                    winshutdown::set_busy(st.me_hosting || !matches!(st.phase, Phase::Idle | Phase::WaitingTurn));
+                    winshutdown::set_busy(st.me_hosting || st.replicating || st.sync.is_some() || !matches!(st.phase, Phase::Idle | Phase::WaitingTurn));
                     tray::update(&app, &st);
+                    atualizacao::status_mudou(&app);
                     let _ = app.emit("p3://status", &st);
                 }
             }
@@ -170,6 +172,9 @@ pub fn quit(app: &AppHandle) {
     }
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
+        // "Atualizar ao fechar": passa o host / salva com a nuvem conferida e instala (o
+        // processo termina lá). Se não der, segue o fechamento normal.
+        atualizacao::ao_fechar(&app2).await;
         if let Some(engine) = app2.state::<AppState>().engine() {
             if engine.is_hosting().await {
                 show_main(&app2);
@@ -207,12 +212,13 @@ pub fn run() {
             quitting: AtomicBool::new(false),
             start_minimized,
             pending_invite: Mutex::new(None),
-            update: tokio::sync::Mutex::new(None),
+            atualizacao: atualizacao::Servico::default(),
             log_guard: Mutex::new(None),
         })
         .setup(|app| {
             let handle = app.handle().clone();
             tray::create(&handle)?;
+            atualizacao::iniciar(handle.clone());
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 #[cfg(debug_assertions)]
@@ -275,7 +281,12 @@ pub fn run() {
             commands::save_world_settings,
             commands::console_cmd,
             commands::console_history,
+            commands::last_session_log,
             commands::detect_launchers,
+            commands::client_versions,
+            commands::call_member,
+            commands::restore_copy,
+            commands::world_numbers,
             commands::open_launcher,
             commands::world_players,
             commands::migrate_player,
@@ -284,8 +295,12 @@ pub fn run() {
             commands::test_webhook,
             commands::quit_app,
             commands::hide_window,
-            commands::update_check,
-            commands::update_install,
+            atualizacao::atualizacao_estado,
+            atualizacao::atualizacao_progresso,
+            atualizacao::atualizacao_atualizar,
+            atualizacao::atualizacao_cancelar,
+            atualizacao::atualizacao_verificar,
+            atualizacao::atualizacao_visto,
             setup::setup_suggest_dir,
             setup::setup_init,
             setup::invite_preview,

@@ -43,6 +43,15 @@ pub struct Config {
     pub journal: JournalSettings,
     pub eula_accepted: bool,
     pub setup_complete: bool,
+    /// Canal de atualização: "estavel" (todos) ou "teste" (versões para testar com os amigos
+    /// antes de liberar). Preparado, sem tela: muda-se editando o config.json.
+    pub canal_atualizacao: String,
+    /// Versão da `.minecraft` para abrir o jogo direto (OptiFine, Fabric...). Vazio = o
+    /// Minecraft vanilla do próprio app.
+    pub client_version: Option<String>,
+    /// Endereço do `latest.json` no lugar do padrão (ex.: o Worker conferindo a licença na
+    /// versão comercial). Vazio = padrão do build.
+    pub endpoint_atualizacao: Option<String>,
 }
 
 impl Default for Config {
@@ -69,6 +78,9 @@ impl Default for Config {
             journal: JournalSettings::default(),
             eula_accepted: false,
             setup_complete: false,
+            canal_atualizacao: "estavel".into(),
+            client_version: None,
+            endpoint_atualizacao: None,
         }
     }
 }

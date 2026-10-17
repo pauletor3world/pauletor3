@@ -44,6 +44,12 @@ pub enum NmError {
     #[error("operação cancelada")]
     Cancelled,
 
+    #[error("quem está passando o host usa a versão {host} do app e este PC a {mine}")]
+    AppVersionMismatch { host: String, mine: String },
+
+    #[error("este app ({atual}) está abaixo da versão mínima do grupo ({minima})")]
+    AppOutdated { atual: String, minima: String },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -84,6 +90,8 @@ impl NmError {
             NmError::P2p(_) => "p2p",
             NmError::NotConfigured(_) => "not_configured",
             NmError::Cancelled => "cancelled",
+            NmError::AppVersionMismatch { .. } => "app_version_mismatch",
+            NmError::AppOutdated { .. } => "app_outdated",
             NmError::Other(_) => "other",
         }
     }
@@ -107,6 +115,8 @@ impl NmError {
             NmError::P2p(_) => ("Não consegui conectar com o PC do amigo".into(), None),
             NmError::NotConfigured(_) => ("Falta terminar a configuração".into(), None),
             NmError::Cancelled => ("Cancelado".into(), None),
+            NmError::AppVersionMismatch { .. } => ("Vocês estão em versões diferentes do app; atualize para trocar de host".into(), None),
+            NmError::AppOutdated { .. } => ("Atualize para continuar jogando com o grupo".into(), None),
             NmError::Other(_) => ("Algo deu errado".into(), None),
         };
         HumanError {

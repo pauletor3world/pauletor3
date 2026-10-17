@@ -128,6 +128,10 @@ export interface Status {
   address: string;
   playing: boolean;
   host_client_running: boolean;
+  /** O Minecraft aberto pelo app está rodando. */
+  client_open?: boolean;
+  /** Pediram para abrir o Minecraft e ele está preparando/abrindo. */
+  client_starting?: boolean;
   friends_still_playing: boolean;
   recovery_pending: boolean;
   failover: string | null;
@@ -136,6 +140,10 @@ export interface Status {
   next_checkpoint_at: string | null;
   last_checkpoint_at: string | null;
   coord_ok: boolean;
+  /** Versão mínima do app combinada pelo grupo (coordenação). */
+  versao_minima?: string | null;
+  /** Abaixo da versão mínima: Jogar e hospedar bloqueados. */
+  desatualizado?: boolean;
   net: NetStatus;
   refreshed_at: string | null;
 }
@@ -198,6 +206,7 @@ export interface Config {
   minecraft_dir: string | null;
   launcher_path: string | null;
   direct_launch: boolean;
+  client_version?: string | null;
   ram_mb: number | null;
   client_ram_mb: number | null;
   checkpoint_minutes: number;
@@ -303,4 +312,22 @@ export interface LevelInfo {
   game_type: string;
   seed: number | null;
   singleplayer_uuid: string | null;
+}
+
+/** Versão do Minecraft que dá para abrir direto (vanilla do app ou da .minecraft). */
+export interface ClientVersion {
+  id: string;
+  label: string;
+  kind: "vanilla" | "optifine" | "fabric" | "quilt" | "outra";
+}
+
+/** "Nosso Mundo em números" (estatísticas que o próprio Minecraft grava). */
+export interface WorldNumbers {
+  blocos_minerados: number;
+  distancia_m: number;
+  mortes: number;
+  mobs_derrotados: number;
+  horas_jogadas: number;
+  pulos: number;
+  por_jogador: { nick: string; blocos_minerados: number; distancia_m: number; mortes: number; mobs_derrotados: number; horas_jogadas: number }[];
 }

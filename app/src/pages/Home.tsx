@@ -7,7 +7,7 @@ import {
   Copy,
   Crown,
   Gamepad2,
-  HardDrive,
+  BellRing,
   LifeBuoy,
   Loader2,
   Play,
@@ -43,10 +43,47 @@ interface MainAction {
 /** A cena entra uma vez por abertura do app, não a cada volta ao Início. */
 let sceneShown = false;
 
+/** Depois do primeiro acesso que deu certo, o "Como entrar" dá lugar à última sessão. */
+const ENTROU_KEY = "machencraft.ja-entrou";
+function jaEntrou(): boolean {
+  try {
+    return localStorage.getItem(ENTROU_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export default function HomePage({ status, onPage, toast }: { status: Status | null; onPage: (p: Page) => void; toast: ToastFn }) {
-  useTick(10000);
+  const isOpening = !!status && ((status.phase !== "idle" && status.phase !== "hosting") || !!status.failover);
+  useTick(isOpening ? 1000 : 10000);
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  useEffect(() => {
+    setOpenedAt((t) => (isOpening ? (t ?? Date.now()) : null));
+  }, [isOpening]);
+  const openingFor = openedAt === null ? null : Math.max(0, Math.round((Date.now() - openedAt) / 1000));
+  const [entrou, setEntrou] = useState(jaEntrou);
+  useEffect(() => {
+    if (status?.playing && !entrou) {
+      try {
+        localStorage.setItem(ENTROU_KEY, "1");
+      } catch {
+        // sem armazenamento: o "Como entrar" continua aparecendo
+      }
+      setEntrou(true);
+    }
+  }, [status?.playing, entrou]);
   const { busy, error, setError, run } = useAction();
   const [confirmStop, setConfirmStop] = useState(false);
+  // assistente de migração: aparece só quando há progresso sem dono para vincular (dono)
+  const [orphans, setOrphans] = useState(0);
+  const isOwner = !!status?.is_owner;
+  useEffect(() => {
+    if (!isOwner) return;
+    api
+      .worldPlayers()
+      .then((ps) => setOrphans(ps.filter((p) => !p.nick).length))
+      .catch(() => {});
+  }, [isOwner]);
   const [enter] = useState(() => !sceneShown);
   useEffect(() => {
     sceneShown = true;
@@ -55,7 +92,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   if (!status) {
     return (
       <div className="space-y-6">
-        <Scene enter={enter} lights="off">
+        <Scene enter={enter} lights="off" mood="night">
           <div className="h-full flex items-end p-8">
             <Loader2 className="size-5 animate-spin text-ink-soft" />
           </div>
@@ -86,6 +123,21 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
     main = { label: "Trocando de host", sub: "Fique no jogo: você volta sozinho", icon: <RefreshCw className="size-6 animate-spin" />, kind: "wait" };
   } else if (working) {
     main = { label: phaseLabel[status.phase], sub: "Já já fica pronto", icon: <Loader2 className="size-6 animate-spin" />, kind: "wait" };
+  } else if ((status.me_hosting || held?.purpose === "hosting") && status.client_starting) {
+    // do clique até o jogo abrir: um Minecraft só, sem segundo clique
+    main = {
+      label: status.client_prep ? "Preparando o Minecraft" : "Abrindo o Minecraft",
+      sub: status.client_prep ? "Conferindo os arquivos do jogo" : "A janela do jogo já vai aparecer",
+      icon: <Loader2 className="size-6 animate-spin" />,
+      kind: "wait",
+    };
+  } else if ((status.me_hosting || held?.purpose === "hosting") && (status.playing || status.client_open)) {
+    main = {
+      label: status.playing ? "Jogando" : "Entrando no mundo",
+      sub: status.playing ? "Seu Minecraft está dentro do mundo" : "O Minecraft está aberto, entrando no servidor",
+      icon: status.playing ? <Gamepad2 className="size-6" /> : <Loader2 className="size-6 animate-spin" />,
+      kind: "wait",
+    };
   } else if (status.me_hosting) {
     main = { label: "Abrir o Minecraft", sub: "O mundo está aberto no seu PC", icon: <Gamepad2 className="size-6" />, kind: "play", onClick: () => run("open", api.openGame) };
   } else if (held && held.purpose === "maintenance") {
@@ -93,15 +145,25 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   } else if (held && held.handing_over) {
     main = { label: "Trocando de host", sub: `${held.player} está passando o mundo`, icon: <ArrowRightLeft className="size-6" />, kind: "wait" };
   } else if (held) {
-    main = { label: "Jogar", sub: `Entrar no mundo aberto por ${held.player}`, icon: <Play className="size-6 fill-current" />, kind: "play", onClick: () => run("play", () => api.play(true)) };
-  } else {
     main = {
-      label: "Jogar",
-      sub: replicaOk ? "O mundo acorda no seu PC em segundos" : "O mundo acorda no seu PC",
+      label: "Entrar",
+      sub: online.length > 0 ? `${online.length} no jogo agora` : "O mundo já está aberto",
       icon: <Play className="size-6 fill-current" />,
       kind: "play",
       onClick: () => run("play", () => api.play(true)),
     };
+  } else {
+    main = {
+      label: "Jogar",
+      sub: replicaOk ? "Você abre o mundo, em segundos" : "Você abre o mundo",
+      icon: <Play className="size-6 fill-current" />,
+      kind: "play",
+      onClick: () => run("play", () => api.play(true)),
+    };
+  }
+  // abrindo / trocando: contador de segundos no botão
+  if (main.kind === "wait" && (working || status.failover) && openingFor !== null) {
+    main = { ...main, label: `${status.failover ? "Trocando" : "Abrindo"}... ${openingFor} s` };
   }
 
   const sync = status.sync;
@@ -110,12 +172,25 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
   const prepPct = prep ? (prep.bytes_total > 0 ? Math.min(100, (prep.bytes_done / prep.bytes_total) * 100) : 0) : 0;
   const strip = working || !!prep;
   const lights = st.tone === "live" ? "on" : st.tone === "busy" ? "busy" : "off";
-  const stateWord = st.tone === "live" ? "Aberto" : st.tone === "busy" ? "Ocupado" : st.tone === "warn" ? "Atenção" : "Livre";
+  // a cena conta o estado: noite (dormindo), amanhecer (abrindo/trocando), dia (aberto)
+  const opening = working || !!status.failover || !!held?.handing_over;
+  const mood: "night" | "dawn" | "day" = opening ? "dawn" : status.me_hosting || held?.purpose === "hosting" ? "day" : "night";
+  const stateWord = opening ? "Abrindo" : st.tone === "live" ? "Aberto" : st.tone === "busy" ? "Ocupado" : st.tone === "warn" ? "Atenção" : "Dormindo";
+  const heroLine = status.me_hosting
+    ? `Você está hospedando${online.length > 0 ? `, ${online.length} no jogo` : ""}`
+    : opening
+      ? status.failover ?? "Abrindo o mundo..."
+      : held?.purpose === "hosting"
+        ? `${held.player} está jogando`
+        : held
+          ? st.title
+          : "O mundo está dormindo. Ninguém jogando agora.";
+  const lastWho = status.head ? (status.head.host_player === status.player_name ? "Você" : status.head.host_player) : null;
 
   return (
     <div className="space-y-6">
       {/* ---------------------------------------------------------------- a cena */}
-      <Scene enter={enter} lights={lights}>
+      <Scene enter={enter} lights={lights} mood={mood} smoke={!status.me_hosting && held?.purpose === "hosting"}>
         <div className={cx("scene-copy relative h-full flex flex-col p-8", strip && "pb-[104px]")}>
           <div className="flex items-center gap-2 flex-wrap">
             <span className="inline-flex items-center gap-2 h-7 px-3 rounded-full bg-night-950/55 backdrop-blur-sm ring-1 ring-inset ring-white/10 text-[12.5px] font-bold">
@@ -132,25 +207,32 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
           <h1 className="font-display text-[92px] leading-[0.82] mt-5 text-white [text-shadow:0_2px_0_rgb(6_12_27/0.45),0_10px_40px_rgb(6_12_27/0.6)] max-w-[12ch]">
             {status.world_name}
           </h1>
-          <p className="text-[17px] font-medium text-ink mt-3 max-w-[44ch] [text-shadow:0_1px_12px_rgb(6_12_27/0.8)]">{st.title}</p>
+          <p className="text-[17px] font-medium text-ink mt-3 max-w-[44ch] [text-shadow:0_1px_12px_rgb(6_12_27/0.8)]">{heroLine}</p>
           <div className="flex items-center gap-x-4 gap-y-1 flex-wrap mt-3 text-[13px] text-ink-soft [text-shadow:0_1px_10px_rgb(6_12_27/0.9)]">
             <span className="flex items-center gap-1.5">
               <Save className="size-3.5" /> Salvo {ago(status.last_checkpoint_at ?? status.head?.created_at)}
             </span>
-            {status.head && (
+            {status.head && lastWho && (
               <span className="flex items-center gap-1.5">
-                <UserRound className="size-3.5" /> Última sessão de {status.head.host_player}
-              </span>
-            )}
-            {status.head && (
-              <span className="flex items-center gap-1.5">
-                <HardDrive className="size-3.5" /> {bytes(status.head.total_size)}
+                <UserRound className="size-3.5" /> {lastWho} jogou {ago(status.head.created_at)}
               </span>
             )}
           </div>
 
-          <div className="mt-auto">
+          <div className="mt-auto flex items-end gap-3 flex-wrap">
             <MainButton main={main} busy={!!busy} />
+            {status.me_hosting && !working && (
+              <div className="flex gap-2 pb-1">
+                {friendsOn.length > 0 && (
+                  <Button variant="sun" icon={<ArrowRightLeft className="size-4" />} onClick={() => setConfirmStop(true)}>
+                    Passar o host
+                  </Button>
+                )}
+                <Button className="bg-night-950/60 backdrop-blur-md" icon={<Power className="size-4" />} onClick={() => setConfirmStop(true)}>
+                  Fechar o mundo
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -190,6 +272,20 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
         action={err?.code === "remote" || err?.code === "p2p" ? <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button> : undefined}
       />
 
+      {orphans > 0 && (
+        <InfoNote>
+          <span className="flex items-center gap-3 flex-wrap">
+            <span className="flex-1">
+              Há {orphans === 1 ? "um progresso" : `${orphans} progressos`} no mundo sem dono (de single-player ou de conta com login). Vincule ao nick certo para ninguém perder o
+              inventário.
+            </span>
+            <Button className="h-8" onClick={() => onPage("players")}>
+              Ver e vincular
+            </Button>
+          </span>
+        </InfoNote>
+      )}
+
       {/* ---------------------------------------------------------------- sessão (host) */}
       {status.me_hosting && (
         <Card className="p-5">
@@ -205,15 +301,6 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               <Button icon={<Save className="size-4" />} busy={busy === "save"} onClick={() => run("save", api.saveNow).then(() => toast({ level: "success", title: "Mundo salvo", body: "" }))}>
                 Salvar agora
               </Button>
-              {friendsOn.length > 0 ? (
-                <Button variant="sun" icon={<ArrowRightLeft className="size-4" />} onClick={() => setConfirmStop(true)}>
-                  Passar o host
-                </Button>
-              ) : (
-                <Button variant="danger" icon={<Power className="size-4" />} onClick={() => setConfirmStop(true)}>
-                  Encerrar sessão
-                </Button>
-              )}
             </div>
           </div>
           <div className="grid grid-cols-3 mt-5 pt-4 border-t border-white/[0.06]">
@@ -233,7 +320,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
       )}
 
       <div className="grid grid-cols-[1.5fr_1fr] gap-6">
-        {/* ------------------------------------------------------------ turma */}
+        {/* ------------------------------------------------------------ grupo */}
         <Card>
           <CardTitle
             aside={
@@ -246,39 +333,67 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
               )
             }
           >
-            A turma
+            O grupo
           </CardTitle>
           <div className="px-3 pb-3">
             {status.members.length === 0 ? (
-              <Empty icon={<Users className="size-6" />} title="Carregando a turma…">
+              <Empty icon={<Users className="size-6" />} title="Carregando o grupo…">
                 Assim que a nuvem do mundo responder, todo mundo aparece aqui.
               </Empty>
             ) : (
-              <ul className="grid grid-cols-2 gap-1">
+              <ul className="grid grid-cols-2 gap-0.5">
                 {status.members
                   .filter((m) => m.approved)
                   .sort((a, b) => rank(b, online) - rank(a, online))
                   .map((m) => (
-                    <MemberRow key={m.id} m={m} inGame={online.includes(m.nick)} host={m.nick === host} />
+                    <MemberRow
+                      key={m.id}
+                      m={m}
+                      inGame={online.includes(m.nick)}
+                      host={m.nick === host}
+                      busy={busy === `call-${m.id}`}
+                      onCall={
+                        !m.is_me && !online.includes(m.nick) && m.nick !== host
+                          ? () =>
+                              run(`call-${m.id}`, () => api.callMember(m.id)).then((r) => {
+                                if (r !== undefined) toast({ level: "success", title: `Chamamos ${m.nick}`, body: m.online ? "O app dele avisa agora." : "O app dele avisa quando abrir." });
+                              })
+                          : undefined
+                      }
+                    />
                   ))}
               </ul>
             )}
           </div>
         </Card>
 
-        {/* ------------------------------------------------------------ como entrar */}
+        {/* ------------------------------------------------------------ como entrar / última sessão */}
         <Card>
-          <CardTitle>Como entrar</CardTitle>
+          <CardTitle>{entrou && status.head ? "Última sessão" : "Como entrar"}</CardTitle>
           <div className="px-5 pb-5 space-y-4">
+            {entrou && status.head ? (
+              <div className="space-y-1.5">
+                <div className="text-[15px] font-bold text-ink">
+                  {status.head.host_player === status.player_name ? "Você hospedou" : `${status.head.host_player} hospedou`}
+                  {status.head.duration_secs > 0 && ` por ${duration(status.head.duration_secs)}`}
+                </div>
+                <div className="text-[13px] text-ink-soft">
+                  {status.head.players.length > 1 ? `Com ${status.head.players.filter((p) => p !== status.head!.host_player).join(", ")}` : "Sozinho no mundo"}
+                  {" · "}
+                  {ago(status.head.created_at)}
+                </div>
+              </div>
+            ) : (
             <ol className="space-y-2.5 text-ink-soft text-[13.5px]">
               <li className="flex items-center gap-3">
                 <Step n={1} /> <span>Clique em <b className="text-ink">Jogar</b> e o Minecraft abre</span>
               </li>
               <li className="flex items-center gap-3">
-                <Step n={2} /> <span>No Multiplayer, entre em <b className="text-ink">pAuletOr 3</b></span>
+                <Step n={2} /> <span>No Multiplayer, entre em <b className="text-ink">{status.world_name}</b></span>
               </li>
             </ol>
-            <div className="rounded-xl bg-night-950/60 ring-1 ring-inset ring-white/[0.06] px-3.5 py-3">
+            )}
+            <div className={cx("rounded-xl", entrou && status.head && "hidden")}><div className="rounded-xl bg-night-950/60 ring-1 ring-inset ring-white/[0.06] px-3.5 py-3">
               <div className="text-[12.5px] text-ink-muted mb-1">Endereço, sempre o mesmo</div>
               <div className="flex items-center justify-between gap-2">
                 <code className="font-mono text-[14px] text-sun-300 truncate selectable">{status.address}</code>
@@ -286,7 +401,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
                   <Copy className="size-4" />
                 </button>
               </div>
-            </div>
+            </div></div>
             <div className="flex flex-wrap gap-1.5">
               {status.coord_ok ? (
                 <Pill tone="muted">
@@ -344,7 +459,19 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
  * A cena da identidade, recortada no céu e na casa. A casa tem luz quando o mundo está
  * aberto, pisca enquanto ele se prepara e fica apagada quando o mundo está livre.
  */
-function Scene({ enter, lights, children }: { enter: boolean; lights: "on" | "busy" | "off"; children: ReactNode }) {
+function Scene({
+  enter,
+  lights,
+  mood,
+  smoke,
+  children,
+}: {
+  enter: boolean;
+  lights: "on" | "busy" | "off";
+  mood: "night" | "dawn" | "day";
+  smoke?: boolean;
+  children: ReactNode;
+}) {
   return (
     <section
       className={cx(
@@ -352,11 +479,20 @@ function Scene({ enter, lights, children }: { enter: boolean; lights: "on" | "bu
         enter && "scene-enter",
         lights === "on" && "scene-lit",
         lights === "busy" && "scene-busy",
+        `scene-${mood}`,
       )}
     >
       <div className="scene-art" aria-hidden>
         <img src="/cena.png" alt="" draggable={false} />
+        <div className="scene-tint" />
         <div className="scene-glow" />
+        {smoke && (
+          <span className="scene-smoke">
+            <i />
+            <i />
+            <i />
+          </span>
+        )}
         <span className="scene-window w1" />
         <span className="scene-window w2" />
         <span className="scene-window w3" />
@@ -386,7 +522,7 @@ function MainButton({ main, busy }: { main: MainAction; busy: boolean }) {
         {busy && main.kind !== "wait" ? <Loader2 className="size-6 animate-spin" /> : main.icon}
       </span>
       <span className="min-w-0">
-        <span className="block font-display text-[36px] leading-[0.8]">{busy && main.kind !== "wait" ? "Um instante" : main.label}</span>
+        <span className="block text-[25px] font-extrabold tracking-tight leading-[1.05]">{busy && main.kind !== "wait" ? "Um instante" : main.label}</span>
         {main.sub && <span className={cx("block text-[12.5px] mt-1.5 font-medium", main.kind === "wait" ? "text-ink-soft" : "text-sun-900/75")}>{main.sub}</span>}
       </span>
     </button>
@@ -397,12 +533,12 @@ function rank(m: MemberView, online: string[]) {
   return (m.hosting ? 8 : 0) + (online.includes(m.nick) ? 4 : 0) + (m.online ? 2 : 0) + (m.is_me ? 1 : 0);
 }
 
-function MemberRow({ m, inGame, host }: { m: MemberView; inGame: boolean; host: boolean }) {
+function MemberRow({ m, inGame, host, onCall, busy }: { m: MemberView; inGame: boolean; host: boolean; onCall?: () => void; busy?: boolean }) {
   const label = host ? "Hospedando" : inGame ? "No jogo" : m.online ? "Com o app aberto" : m.last_seen ? `Visto ${ago(m.last_seen)}` : "Ainda não apareceu";
   return (
-    <li className={cx("flex items-center gap-3 rounded-xl px-2.5 py-2", (inGame || host) && "bg-moss-500/[0.08]")}>
+    <li className={cx("group flex items-center gap-2.5 rounded-xl px-2 py-1.5", (inGame || host) && "bg-moss-500/[0.08]")}>
       <div className="relative">
-        <Avatar name={m.nick} size={38} />
+        <Avatar name={m.nick} size={30} />
         <span
           className={cx(
             "absolute -right-1 -bottom-1 size-3.5 rounded-[4px] ring-[3px] ring-night-850",
@@ -418,6 +554,17 @@ function MemberRow({ m, inGame, host }: { m: MemberView; inGame: boolean; host: 
         </div>
         <div className={cx("text-[12.5px] truncate", host ? "text-sun-300" : inGame ? "text-moss-300" : "text-ink-muted")}>{label}</div>
       </div>
+      {onCall && (
+        <button
+          onClick={onCall}
+          disabled={busy}
+          title={`Chamar ${m.nick} pro jogo`}
+          aria-label={`Chamar ${m.nick} pro jogo`}
+          className="ml-auto shrink-0 h-7 px-2 rounded-lg text-[12px] font-semibold text-ink-muted hover:text-sun-300 hover:bg-white/[0.06] opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition cursor-pointer flex items-center gap-1"
+        >
+          {busy ? <Loader2 className="size-3.5 animate-spin" /> : <BellRing className="size-3.5" />} Chamar
+        </button>
+      )}
     </li>
   );
 }

@@ -28,8 +28,13 @@ pub async fn prepare(paths: &Paths, v: &Versions, progress: SyncProgressFn) -> N
     java::download_verified(&v.fabric_launcher, &dir.join(LAUNCHER_JAR), progress.clone()).await?;
     java::download_verified(&v.vanilla_server, &dir.join("server.jar"), progress.clone()).await?;
     let lithium = dir.join("mods").join(&v.lithium.filename);
-    java::download_verified(&v.lithium, &lithium, progress).await?;
-    enforce_only_lithium(&dir.join("mods"), &v.lithium.filename)?;
+    java::download_verified(&v.lithium, &lithium, progress.clone()).await?;
+    let mut keep = vec![v.lithium.filename.clone()];
+    if let Some(skin) = v.skin_mod() {
+        java::download_verified(&skin, &dir.join("mods").join(&skin.filename), progress).await?;
+        keep.push(skin.filename.clone());
+    }
+    enforce_only(&dir.join("mods"), &keep)?;
     // O launcher do Fabric 1.1.x ignora `serverJar` e procura o jar oficial em
     // `.fabric/server/<versão>-server.jar`; colocamos lá a cópia já conferida (sha1 da Mojang).
     let fabric_jar = fabric_vanilla_jar(paths, v);
@@ -49,11 +54,11 @@ pub fn fabric_vanilla_jar(paths: &Paths, v: &Versions) -> PathBuf {
     paths.server().join(".fabric").join("server").join(format!("{}-server.jar", v.minecraft))
 }
 
-fn enforce_only_lithium(mods: &Path, keep: &str) -> NmResult<()> {
+fn enforce_only(mods: &Path, keep: &[String]) -> NmResult<()> {
     for e in std::fs::read_dir(mods)? {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
-        if name != keep && e.path().is_file() {
+        if !keep.contains(&name) && e.path().is_file() {
             tracing::warn!(file = %name, "removendo arquivo estranho da pasta mods");
             std::fs::remove_file(e.path())?;
         }
@@ -68,10 +73,15 @@ pub fn verify_install(paths: &Paths, v: &Versions) -> NmResult<()> {
     v.vanilla_server.verify(&dir.join("server.jar"))?;
     v.vanilla_server.verify(&fabric_vanilla_jar(paths, v))?;
     v.lithium.verify(&dir.join("mods").join(&v.lithium.filename))?;
+    let skin = v.skin_mod();
+    if let Some(s) = &skin {
+        s.verify(&dir.join("mods").join(&s.filename))?;
+    }
     let extras: Vec<String> = std::fs::read_dir(dir.join("mods"))?
         .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n != &v.lithium.filename)
+        .filter(|n| n != &v.lithium.filename && skin.as_ref().map(|s| &s.filename != n).unwrap_or(true))
         .collect();
     if !extras.is_empty() {
         return Err(NmError::VersionMismatch(format!("mods não permitidos: {}", extras.join(", "))));
@@ -460,7 +470,7 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         std::fs::write(d.path().join("lithium.jar"), b"x").unwrap();
         std::fs::write(d.path().join("hack.jar"), b"x").unwrap();
-        enforce_only_lithium(d.path(), "lithium.jar").unwrap();
+        enforce_only(d.path(), &["lithium.jar".to_string()]).unwrap();
         assert!(d.path().join("lithium.jar").exists());
         assert!(!d.path().join("hack.jar").exists());
     }

@@ -71,6 +71,10 @@ pub struct Versions {
     pub lithium_version: String,
     /// Lithium (Modrinth); sha512 vem da API do Modrinth.
     pub lithium: PinnedFile,
+    /// SkinRestorer (Modrinth, só no servidor; sha512 da API do Modrinth): no modo offline,
+    /// busca a skin de cada um pelo nick na Mojang (assinada), para todo mundo se ver com skin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skinrestorer: Option<PinnedFile>,
     /// JSON da versão do cliente (piston-meta da Mojang). O sha1 dele encadeia o resto:
     /// client.jar, bibliotecas, índice de assets e configuração de log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,6 +101,18 @@ impl Versions {
             fabric_loader: self.fabric_loader.clone(),
             lithium: self.lithium_version.clone(),
         }
+    }
+
+    /// Mods do servidor além do Lithium: o SkinRestorer, só no modo offline (no modo online as
+    /// skins já vêm da Mojang). Um `versions.json` antigo usa o embutido, se a versão bater.
+    pub fn skin_mod(&self) -> Option<PinnedFile> {
+        if !crate::OFFLINE_MODE {
+            return None;
+        }
+        self.skinrestorer.clone().or_else(|| {
+            let b = Self::builtin();
+            (b.minecraft == self.minecraft).then_some(b.skinrestorer).flatten()
+        })
     }
 
     /// Metadados do cliente. Um `versions.json` antigo (sem o campo) usa o embutido, se a

@@ -1,13 +1,17 @@
-import { BarChart3, Flame, Moon, Skull, Timer, Trophy } from "lucide-react";
+import { BarChart3, ClipboardCopy, Flame, Moon, Skull, Sprout, Timer, Trophy } from "lucide-react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useEffect, useMemo, useState } from "react";
 import { Avatar } from "../components/Avatar";
-import { Card, CardTitle, Empty, ErrorBanner, PageHeader, Stat } from "../components/ui";
+import { Button, Card, CardTitle, Empty, ErrorBanner, PageHeader, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { duration, hours, hue } from "../lib/format";
 import { useAction } from "../lib/hooks";
-import type { Stats } from "../lib/types";
+import type { Stats, WorldNumbers } from "../lib/types";
 
-export default function StatsPage() {
+/** Janela dos números recentes (mapa de dias e mortes). */
+const WINDOW = 70;
+
+export default function StatsPage({ worldName = "Nosso mundo" }: { worldName?: string }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const { error, setError, run } = useAction();
   useEffect(() => {
@@ -23,18 +27,28 @@ export default function StatsPage() {
   );
   const totalSecs = players.reduce((a, p) => a + p.seconds, 0);
   const topHost = Object.entries(stats?.hosts ?? {}).sort((a, b) => b[1] - a[1])[0];
+  // Uma janela só (70 dias) para o mapa e para as mortes.
   const deaths = useMemo(() => {
     const m: Record<string, number> = {};
-    for (const d of Object.values(stats?.daily ?? {})) for (const [p, n] of Object.entries(d.deaths)) m[p] = (m[p] ?? 0) + n;
+    const since = new Date();
+    since.setDate(since.getDate() - (WINDOW - 1));
+    const from = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, "0")}-${String(since.getDate()).padStart(2, "0")}`;
+    for (const [day, d] of Object.entries(stats?.daily ?? {})) {
+      if (day < from) continue;
+      for (const [p, n] of Object.entries(d.deaths)) m[p] = (m[p] ?? 0) + n;
+    }
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [stats]);
+  // Mundo novo: o mapa quase vazio passa a sensação de mundo parado; mostra a data de criação.
+  const born = stats?.world_born ? new Date(stats.world_born) : null;
+  const young = !born || Date.now() - born.getTime() < 21 * 86400_000;
 
   // Últimos 70 dias para o mapa de calor.
   const heat = useMemo(() => {
     const days = new Set(stats?.days ?? []);
     const out: { date: string; on: boolean; secs: number }[] = [];
     const today = new Date();
-    for (let i = 69; i >= 0; i--) {
+    for (let i = WINDOW - 1; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -49,6 +63,7 @@ export default function StatsPage() {
   return (
     <div>
       <PageHeader title="Estatísticas" subtitle="A história do mundo em números." />
+      <WorldNumbersCard worldName={worldName} />
       <ErrorBanner error={error} onClose={() => setError(null)} />
       {stats && players.length === 0 && stats.sessions === 0 ? (
         <Card>
@@ -64,8 +79,8 @@ export default function StatsPage() {
               <Stat label="Sessões" value={String(stats.sessions)} className="pl-6 border-l border-white/[0.06]" />
               <Stat label="Dias jogados" value={String(stats.days.length)} className="pl-6 border-l border-white/[0.06]" />
               <div className="pl-6 border-l border-white/[0.06] min-w-0">
-                <Stat label="Quem mais hospedou" value={topHost ? topHost[0] : "—"} />
-                {topHost && <div className="text-[12.5px] text-ink-faint mt-1">{topHost[1]} sessões</div>}
+                <Stat label="Quem mais abriu o mundo" value={topHost ? topHost[0] : "—"} />
+                {topHost && <div className="text-[12.5px] text-ink-faint mt-1">{topHost[1]} vezes</div>}
               </div>
             </Card>
 
@@ -108,15 +123,24 @@ export default function StatsPage() {
                   </li>
                   <li className="flex items-center gap-2.5">
                     <Skull className="size-4 text-ink-muted" />
-                    <span className="text-ink-muted flex-1">Mais mortes (60 dias)</span>
+                    <span className="text-ink-muted flex-1">Mais mortes ({WINDOW} dias)</span>
                     <span className="font-semibold">{deaths[0] ? `${deaths[0][0]} · ${deaths[0][1]}` : "ninguém morreu"}</span>
                   </li>
                 </ul>
               </Card>
             </div>
 
+            {young ? (
+              <Card className="px-5 py-5 flex items-center gap-3">
+                <Sprout className="size-5 text-moss-400 shrink-0" />
+                <div>
+                  <div className="font-bold">{born ? `Mundo criado em ${born.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : "Mundo novinho"}</div>
+                  <div className="text-[13px] text-ink-muted">O mapa dos dias jogados aparece depois das primeiras semanas.</div>
+                </div>
+              </Card>
+            ) : (
             <Card>
-              <CardTitle aside={<span className="text-[12px] text-ink-muted">últimos 70 dias</span>}>Dias jogados</CardTitle>
+              <CardTitle aside={<span className="text-[12px] text-ink-muted">últimos {WINDOW} dias</span>}>Dias jogados</CardTitle>
               <div className="px-5 pb-5">
                 <div className="grid grid-flow-col grid-rows-7 gap-1.5 w-fit">
                   {heat.map((h) => (
@@ -132,6 +156,7 @@ export default function StatsPage() {
                 </div>
               </div>
             </Card>
+            )}
           </div>
         )
       )}
@@ -146,5 +171,57 @@ function Milestone({ icon, label, value }: { icon: React.ReactNode; label: strin
       <span className="text-ink-muted flex-1">{label}</span>
       <span className="font-semibold">{value ? `${value[0]} · ${new Date(value[1]).toLocaleDateString("pt-BR")}` : "ainda não"}</span>
     </li>
+  );
+}
+
+const fmt = (n: number) => Math.round(n).toLocaleString("pt-BR");
+
+/** "Nosso Mundo em números": o que o próprio Minecraft grava, pronto para compartilhar. */
+function WorldNumbersCard({ worldName }: { worldName: string }) {
+  const [n, setN] = useState<WorldNumbers | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    api.worldNumbers().then(setN).catch(() => {});
+  }, []);
+  if (!n || n.por_jogador.length === 0) return null;
+  const km = n.distancia_m / 1000;
+  const items: [string, string][] = [
+    ["blocos minerados", fmt(n.blocos_minerados)],
+    ["km percorridos", km >= 10 ? fmt(km) : km.toFixed(1).replace(".", ",")],
+    ["mobs derrotados", fmt(n.mobs_derrotados)],
+    ["mortes", fmt(n.mortes)],
+    ["horas jogadas", fmt(n.horas_jogadas)],
+  ];
+  const share = async () => {
+    const top = n.por_jogador[0];
+    const txt = [
+      `${worldName} em números ⛏️`,
+      ...items.map(([l, v]) => `• ${v} ${l}`),
+      top ? `Quem mais jogou: ${top.nick} (${fmt(top.horas_jogadas)} h)` : "",
+      "Feito com o Machen Craft",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    await writeText(txt);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2500);
+  };
+  return (
+    <Card className="mb-5">
+      <CardTitle
+        aside={
+          <Button variant="ghost" className="h-8" icon={<ClipboardCopy className="size-4" />} onClick={share}>
+            {copied ? "Copiado!" : "Copiar para compartilhar"}
+          </Button>
+        }
+      >
+        {worldName} em números
+      </CardTitle>
+      <div className="px-5 pb-5 grid grid-cols-5 gap-4">
+        {items.map(([l, v]) => (
+          <Stat key={l} label={l} value={v} />
+        ))}
+      </div>
+    </Card>
   );
 }

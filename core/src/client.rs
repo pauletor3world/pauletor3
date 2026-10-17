@@ -189,6 +189,11 @@ fn rule_matches(r: &Rule, features: &Features) -> bool {
 }
 
 /// Mesma semântica do launcher oficial: sem regras, vale; com regras, vale a última que casar.
+/// As regras de uma biblioteca/argumento valem neste PC? (usado também pelas versões da `.minecraft`)
+pub fn rules_allow(rules: &[Rule], features: &BTreeMap<&'static str, bool>) -> bool {
+    allowed(rules, features)
+}
+
 fn allowed(rules: &[Rule], features: &Features) -> bool {
     if rules.is_empty() {
         return true;
@@ -632,36 +637,66 @@ impl Installed {
     }
 
     pub fn classpath(&self) -> String {
+        self.classpath_with(None)
+    }
+
+    /// Classpath com uma versão da `.minecraft` por cima: as bibliotecas dela primeiro (as do
+    /// vanilla com o mesmo grupo:artefato saem) e o jar dela, se tiver.
+    pub fn classpath_with(&self, overlay: Option<&crate::instancias::Overlay>) -> String {
         let sep = if cfg!(windows) { ";" } else { ":" };
         let libs = self.layout.libraries();
-        let mut parts: Vec<String> = self
-            .meta
-            .libraries_here()
-            .iter()
-            .filter_map(|a| crate::util::join_rel(&libs, a.path.as_deref()?).ok())
-            .map(|p| p.display().to_string())
-            .collect();
-        parts.push(self.client_jar().display().to_string());
+        let mut parts: Vec<String> = overlay.map(|o| o.libraries.iter().map(|p| p.display().to_string()).collect()).unwrap_or_default();
+        let none = Features::new();
+        let mut seen = BTreeSet::new();
+        for l in &self.meta.libraries {
+            if !allowed(&l.rules, &none) || !native_for_this_arch(&l.name) {
+                continue;
+            }
+            if let Some(o) = overlay {
+                let mut p = l.name.split(':');
+                let ga = format!("{}:{}", p.next().unwrap_or(""), p.next().unwrap_or(""));
+                if o.replaces.contains(&ga) {
+                    continue;
+                }
+            }
+            let Some(rel) = l.downloads.artifact.as_ref().and_then(|a| a.path.clone()) else { continue };
+            if !seen.insert(rel.clone()) {
+                continue;
+            }
+            if let Ok(p) = crate::util::join_rel(&libs, &rel) {
+                parts.push(p.display().to_string());
+            }
+        }
+        let jar = overlay.and_then(|o| o.jar.clone()).unwrap_or_else(|| self.client_jar());
+        parts.push(jar.display().to_string());
         parts.join(sep)
     }
 
     /// Argumentos para o `java` (tudo depois do executável).
     pub fn command_line(&self, o: &LaunchOptions) -> NmResult<Vec<String>> {
-        let id = &self.meta.id;
+        self.command_line_with(o, None)
+    }
+
+    /// Argumentos com uma versão da `.minecraft` (OptiFine, Fabric) por cima do vanilla.
+    pub fn command_line_with(&self, o: &LaunchOptions, overlay: Option<&crate::instancias::Overlay>) -> NmResult<Vec<String>> {
+        let id = overlay.map(|v| &v.id).unwrap_or(&self.meta.id);
+        let game_dir = overlay.map(|v| v.game_dir.clone()).unwrap_or_else(|| self.layout.game());
         let mut vars: BTreeMap<&str, String> = BTreeMap::new();
         vars.insert("auth_player_name", o.nick.clone());
         vars.insert("version_name", id.clone());
-        vars.insert("game_directory", self.layout.game().display().to_string());
+        vars.insert("game_directory", game_dir.display().to_string());
         vars.insert("assets_root", self.layout.assets().display().to_string());
         vars.insert("assets_index_name", self.meta.asset_index.id.clone());
         vars.insert("auth_uuid", o.uuid.replace('-', ""));
         // modo offline: o servidor do build pessoal não confere token
         vars.insert("auth_access_token", "0".into());
         vars.insert("version_type", if self.meta.kind.is_empty() { "release".into() } else { self.meta.kind.clone() });
-        vars.insert("natives_directory", self.layout.natives(id).display().to_string());
+        vars.insert("natives_directory", self.layout.natives(&self.meta.id).display().to_string());
+        vars.insert("library_directory", self.layout.libraries().display().to_string());
+        vars.insert("classpath_separator", if cfg!(windows) { ";" } else { ":" }.to_string());
         vars.insert("launcher_name", "MachenCraft".into());
         vars.insert("launcher_version", crate::APP_VERSION.into());
-        vars.insert("classpath", self.classpath());
+        vars.insert("classpath", self.classpath_with(overlay));
         if let Some(q) = &o.quick_play {
             vars.insert("quickPlayMultiplayer", q.clone());
         }
@@ -670,12 +705,18 @@ impl Installed {
 
         let mut out = crate::heap::client_jvm_args(o.heap_mb);
         out.extend(expand(&self.meta.arguments.jvm, &features, &vars));
+        if let Some(v) = overlay {
+            out.extend(expand(&v.jvm, &features, &vars));
+        }
         if let Some(l) = self.meta.logging.as_ref().and_then(|l| l.client.as_ref()) {
             let cfg = self.layout.assets().join("log_configs").join(log_config_name(l)?);
             out.push(l.argument.replace("${path}", &cfg.display().to_string()));
         }
-        out.push(self.meta.main_class.clone());
+        out.push(overlay.map(|v| v.main_class.clone()).unwrap_or_else(|| self.meta.main_class.clone()));
         out.extend(expand(&self.meta.arguments.game, &features, &vars));
+        if let Some(v) = overlay {
+            out.extend(expand(&v.game, &features, &vars));
+        }
         Ok(out)
     }
 

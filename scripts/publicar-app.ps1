@@ -1,15 +1,23 @@
 ﻿# Gera o instalador do Machen Craft (build pessoal) e publica no SEU Worker de coordenação.
-# Os amigos baixam pelo link do convite, e quem já tem o app recebe a atualização sozinho.
-# Nada vai para um site público.
+# Os amigos baixam pelo link do convite, e quem já tem o app recebe a atualização sozinho
+# (o app procura a cada 1 h). Nada vai para um site público.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\publicar-app.ps1               # versão atual
-#   powershell -ExecutionPolicy Bypass -File scripts\publicar-app.ps1 -Versao 2.0.1 # nova versão
+#   powershell -ExecutionPolicy Bypass -File scripts\publicar-app.ps1 -Versao 2.1.0 # nova versão
+#   ... -Canal teste          # só para quem está no canal de teste (ver docs/atualizacao.md)
+#   ... -Obrigatoria          # marca a versão como obrigatória
 #
-# Requer: scripts\publicar-coordenacao.ps1 já rodado (endereço e chave em scripts\.cache),
-# e a chave de assinatura das atualizações (padrão: D:\DevTools\pauletor3-signing).
+# As notas vêm do CHANGELOG.md (seção da versão), ou de -Notas / -ArquivoNotas.
+# Endereço e chave do Worker: variáveis COORDENACAO_URL e ADMIN_TOKEN (usadas no GitHub
+# Actions) ou scripts\.cache\coordenacao.txt (gravado por publicar-coordenacao.ps1).
+# Chave de assinatura das atualizações: -PastaChave (padrão D:\DevTools\pauletor3-signing).
 param(
   [string]$Versao = "",
   [string]$Notas = "",
+  [string]$ArquivoNotas = "",
+  [ValidateSet("estavel", "teste")]
+  [string]$Canal = "estavel",
+  [switch]$Obrigatoria,
   [string]$PastaChave = "D:\DevTools\pauletor3-signing",
   [switch]$SemCompilar
 )
@@ -19,12 +27,16 @@ Set-Location $root
 
 function Fail($t) { Write-Host ""; Write-Host "ERRO: $t" -ForegroundColor Red; exit 1 }
 
-$saved = Join-Path $PSScriptRoot ".cache\coordenacao.txt"
-if (-not (Test-Path $saved)) { Fail "Rode antes scripts\publicar-coordenacao.ps1." }
-$cfg = @{}
-Get-Content $saved | ForEach-Object { $k, $v = $_ -split "=", 2; $cfg[$k] = $v }
-$url = $cfg["ENDERECO"]; $admin = $cfg["CHAVE"]
-if (-not $url -or -not $admin) { Fail "scripts\.cache\coordenacao.txt incompleto; rode publicar-coordenacao.ps1 de novo." }
+$url = $env:COORDENACAO_URL; $admin = $env:ADMIN_TOKEN
+if (-not $url -or -not $admin) {
+  $saved = Join-Path $PSScriptRoot ".cache\coordenacao.txt"
+  if (-not (Test-Path $saved)) { Fail "Rode antes scripts\publicar-coordenacao.ps1 (ou defina COORDENACAO_URL e ADMIN_TOKEN)." }
+  $cfg = @{}
+  Get-Content $saved | ForEach-Object { $k, $v = $_ -split "=", 2; $cfg[$k] = $v }
+  $url = $cfg["ENDERECO"]; $admin = $cfg["CHAVE"]
+}
+if (-not $url -or -not $admin) { Fail "Endereço ou chave do Worker ausentes; rode publicar-coordenacao.ps1 de novo." }
+$url = $url.TrimEnd("/")
 
 function SetVersion($path, $pattern, $replacement) {
   $full = Join-Path $root $path
@@ -39,9 +51,12 @@ if ($Versao) {
 } else {
   $Versao = (Get-Content app\src-tauri\tauri.conf.json -Raw | ConvertFrom-Json).version
 }
+node scripts/conferir-versao.mjs
+if ($LASTEXITCODE -ne 0) { Fail "Versões diferentes entre os arquivos." }
 
 if (-not $SemCompilar) {
   Write-Host "==> Compilando o instalador (build pessoal) v$Versao" -ForegroundColor Green
+  # a chave fica só em variável de ambiente deste processo (nunca em arquivo do repositório nem no log)
   $env:TAURI_SIGNING_PRIVATE_KEY = (Get-Content (Join-Path $PastaChave "pauletor3-updater.key") -Raw).Trim()
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content (Join-Path $PastaChave "senha-da-chave.txt") -Raw).Trim()
   Push-Location app
@@ -60,14 +75,21 @@ if (-not $exe) { Fail "Instalador da versão $Versao não encontrado em $nsis." 
 $sig = "$($exe.FullName).sig"
 if (-not (Test-Path $sig)) { Fail "Assinatura $sig não encontrada (a chave de assinatura estava disponível?)." }
 
-Write-Host "==> Enviando $($exe.Name) ($([math]::Round($exe.Length / 1MB, 1)) MB) para $url" -ForegroundColor Green
+if ($ArquivoNotas) { $Notas = [IO.File]::ReadAllText($ArquivoNotas) }
+if (-not $Notas) { $Notas = (node scripts/notas-da-versao.mjs $Versao) -join "`n" }
+$notasB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Notas.Trim()))
+
+$destino = "$url/v1/app/installer"
+if ($Canal -eq "teste") { $destino += "?canal=teste" }
+Write-Host "==> Enviando $($exe.Name) ($([math]::Round($exe.Length / 1MB, 1)) MB), canal $Canal" -ForegroundColor Green
 $headers = @{
   "x-p3-admin" = $admin
   "x-p3-version" = $Versao
   "x-p3-updater-signature" = (Get-Content $sig -Raw).Trim()
-  "x-p3-notes" = $Notas
+  "x-p3-notes-b64" = $notasB64
 }
-$r = Invoke-RestMethod -Method Put -Uri "$url/v1/app/installer" -Headers $headers -InFile $exe.FullName -ContentType "application/octet-stream" -TimeoutSec 600
+if ($Obrigatoria) { $headers["x-p3-obrigatoria"] = "1" }
+$r = Invoke-RestMethod -Method Put -Uri $destino -Headers $headers -InFile $exe.FullName -ContentType "application/octet-stream" -TimeoutSec 600
 if (-not $r.ok) { Fail "O Worker não confirmou a publicação." }
 Write-Host ""
-Write-Host "Pronto: versão $Versao publicada. Convites novos já baixam esta versão, e os apps abertos se atualizam em até 6 horas." -ForegroundColor Green
+Write-Host "Pronto: versão $Versao publicada (canal $Canal). Convites novos já baixam esta versão, e os apps abertos se atualizam em até 1 hora." -ForegroundColor Green

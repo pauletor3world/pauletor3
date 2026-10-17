@@ -476,3 +476,37 @@ async fn gc_keeps_what_is_referenced() {
         b.engine(rb).materialize(&m, &b.paths.server(), quiet()).await.unwrap();
     }
 }
+
+/// Troca planejada só entre a mesma versão do app; a versão mínima chega na fotografia.
+#[tokio::test]
+async fn planned_handoff_requires_same_app_version_and_min_version_reaches_view() {
+    let h = hub();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    let ga = a.acquire("sa", 3).await.unwrap();
+    b.coord.presence(&Presence { replica_seq: 3, playing: true, ..Default::default() }).await.unwrap();
+    ga.release_handoff().await.unwrap();
+
+    let mut old = LeaseManager::new_request("sb", "Bia", LeasePurpose::Hosting, None, 3);
+    old.app_version = "0.0.1".into();
+    assert!(matches!(b.coord.acquire(old).await, Err(NmError::AppVersionMismatch { .. })));
+    assert!(b.acquire("sb", 3).await.is_ok(), "mesma versão assume");
+
+    assert_eq!(b.coord.view().await.unwrap().versao_minima, None);
+    h.client("b").set_versao_minima(Some("99.0.0"));
+    assert_eq!(b.coord.view().await.unwrap().versao_minima.as_deref(), Some("99.0.0"));
+    assert!(machencraft_core::atualizacao::abaixo_do_minimo(machencraft_core::APP_VERSION, "99.0.0"));
+}
+
+/// "Chamar pro jogo": o chamado chega uma vez só, na presença de quem foi chamado.
+#[tokio::test]
+async fn call_member_arrives_once_on_presence() {
+    let h = hub();
+    let a = Pc::new(&h, "a");
+    let b = Pc::new(&h, "b");
+    b.coord.call("a").await.unwrap();
+    let v = a.coord.presence(&Presence::default()).await.unwrap();
+    assert_eq!(v.chamado.as_ref().map(|c| c.de.as_str()), Some("Bia"));
+    assert!(a.coord.presence(&Presence::default()).await.unwrap().chamado.is_none());
+    assert!(b.coord.call("ninguem").await.is_err());
+}

@@ -110,6 +110,10 @@ pub struct Status {
     /// O Minecraft deste PC está dentro do mundo agora.
     pub playing: bool,
     pub host_client_running: bool,
+    /// O Minecraft que o app abriu está rodando (do clique até fechar o jogo).
+    pub client_open: bool,
+    /// Pediram para abrir o Minecraft e ele ainda está preparando/abrindo.
+    pub client_starting: bool,
     pub friends_still_playing: bool,
     pub recovery_pending: bool,
     /// Troca automática de host em andamento (mensagem para a interface).
@@ -120,6 +124,11 @@ pub struct Status {
     pub last_checkpoint_at: Option<DateTime<Utc>>,
     /// A coordenação respondeu na última consulta.
     pub coord_ok: bool,
+    /// Versão mínima do app definida pelo dono (vem da coordenação).
+    pub versao_minima: Option<String>,
+    /// Este app está abaixo da versão mínima: Jogar e hospedar ficam bloqueados até atualizar.
+    /// Com a coordenação fora do ar, nunca bloqueia (modo degradado).
+    pub desatualizado: bool,
     pub net: NetStatus,
     pub refreshed_at: Option<DateTime<Utc>>,
 }
@@ -210,6 +219,9 @@ pub struct Engine {
     client_busy: AtomicBool,
     /// Alguém pediu para abrir o jogo enquanto a preparação rodava.
     client_launch_wanted: AtomicBool,
+    /// O Minecraft aberto pelo app está vivo (evita abrir dois com cliques seguidos: o processo
+    /// novo demora a aparecer na lista do sistema).
+    client_alive: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -254,6 +266,8 @@ impl Engine {
             address: config.game_address(),
             playing: false,
             host_client_running: false,
+            client_open: false,
+            client_starting: false,
             friends_still_playing: false,
             recovery_pending: LocalState::load(&paths).dirty,
             failover: None,
@@ -262,6 +276,8 @@ impl Engine {
             next_checkpoint_at: None,
             last_checkpoint_at: None,
             coord_ok: false,
+            versao_minima: None,
+            desatualizado: false,
             net: NetStatus::default(),
             refreshed_at: None,
         };
@@ -290,6 +306,7 @@ impl Engine {
             handoff_at: std::sync::Mutex::new(None),
             client_busy: AtomicBool::new(false),
             client_launch_wanted: AtomicBool::new(false),
+            client_alive: Arc::new(AtomicBool::new(false)),
         }))
     }
 
@@ -391,7 +408,13 @@ impl Engine {
         let id = self.secrets.read().await.identity().ok_or_else(|| NmError::NotConfigured("identidade ausente".into()))?;
         let api = ApiClient::new(&url, &world, id)?;
         let headers = api.auth_headers(&format!("/u/{world}")).to_vec();
-        Ok((format!("{}/u/{world}/latest.json", url.trim_end_matches('/')), headers))
+        let cfg = self.config.read().await;
+        let canal = if cfg.canal_atualizacao == "teste" { "?canal=teste" } else { "" };
+        let endpoint = match cfg.endpoint_atualizacao.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+            Some(e) => e.to_string(),
+            None => format!("{}/u/{world}/latest.json{canal}", url.trim_end_matches('/')),
+        };
+        Ok((endpoint, headers))
     }
 
     async fn sync_engine(&self) -> NmResult<SyncEngine> {
@@ -681,11 +704,18 @@ impl Engine {
             if let Err(e) = self.tick(tick).await {
                 tracing::debug!(error = %e, "ciclo de fundo com erro");
             }
-            let busy = self.is_hosting().await
-                || self.status().playing
-                || matches!(self.status().lease, Some(LeaseStatus::Held { .. }))
-                || self.status().failover.is_some();
-            let wait = if busy { 4 } else { 20 };
+            let st = self.status();
+            // troca de host em andamento (passando ou assumindo): ciclo de 1 s, para quem joga
+            // assumir e voltar ao mundo o quanto antes
+            let handover = st.failover.is_some()
+                || self.handing_off()
+                || match &st.lease {
+                    Some(LeaseStatus::Held { lease }) => lease.handing_over,
+                    Some(LeaseStatus::Free { previous: Some(p) }) => p.handing_over,
+                    _ => false,
+                };
+            let busy = self.is_hosting().await || st.playing || matches!(st.lease, Some(LeaseStatus::Held { .. })) || st.failover.is_some();
+            let wait = if handover { 1 } else if busy { 4 } else { 20 };
             for _ in 0..(wait * 4) {
                 tokio::time::sleep(Duration::from_millis(250)).await;
                 if self.wake_requested.load(Ordering::SeqCst) {
@@ -767,7 +797,10 @@ impl Engine {
         let view = match async { self.backend().await?.coord.presence(&presence).await }.await {
             Ok(v) => v,
             Err(e) => {
-                self.set_status(|s| s.coord_ok = false);
+                self.set_status(|s| {
+                    s.coord_ok = false;
+                    s.desatualizado = false;
+                });
                 // sem a nuvem, um túnel até o host que já funciona continua valendo
                 if !hosting && !matches!(self.route().await, Some(Route::Remote(_))) {
                     self.set_route(Route::Waiting {
@@ -905,7 +938,10 @@ impl Engine {
         let view = match async { self.backend().await?.coord.view().await }.await {
             Ok(v) => v,
             Err(e) => {
-                self.set_status(|s| s.coord_ok = false);
+                self.set_status(|s| {
+                    s.coord_ok = false;
+                    s.desatualizado = false;
+                });
                 return Err(e);
             }
         };
@@ -965,6 +1001,11 @@ impl Engine {
             _ => None,
         };
         let is_owner = view.me.as_ref().map(|m| m.role == Role::Owner).unwrap_or(cfg.is_owner);
+        if let Some(c) = &view.chamado {
+            self.notice(NoticeLevel::Info, &format!("{} está te chamando pro jogo", c.de), "Abra o app e clique em Jogar.");
+        }
+        let versao_minima = view.versao_minima.clone().filter(|v| !v.trim().is_empty());
+        let desatualizado = versao_minima.as_deref().map(|m| crate::atualizacao::abaixo_do_minimo(crate::APP_VERSION, m)).unwrap_or(false);
         if view.name != cfg.world_name && !view.name.is_empty() {
             let n = view.name.clone();
             let _ = self.update_config(|c| c.world_name = n).await;
@@ -981,6 +1022,8 @@ impl Engine {
             s.me_hosting = me_hosting;
             s.is_owner = is_owner;
             s.coord_ok = true;
+            s.versao_minima = versao_minima;
+            s.desatualizado = desatualizado;
             s.refreshed_at = Some(Utc::now());
             s.recovery_pending = LocalState::load(&self.paths).dirty;
             s.replica_seq = LocalState::load(&self.paths).replica.map(|r| r.seq).unwrap_or(0);
@@ -1035,6 +1078,7 @@ impl Engine {
     /// se o mundo está livre, acorda o servidor neste PC.
     pub async fn play(self: &Arc<Self>, open_game: bool) -> NmResult<()> {
         let _ = self.refresh().await;
+        self.exigir_versao_minima()?;
         let held_by_other = {
             let me = self.my_id().await;
             matches!(self.status().lease, Some(LeaseStatus::Held { ref lease }) if lease.holder != me)
@@ -1046,7 +1090,28 @@ impl Engine {
         self.play_with(PlayTrigger::Button, open_game).await
     }
 
+    /// "Chamar pro jogo": o app do amigo avisa (notificação do Windows) na próxima presença.
+    pub async fn chamar(&self, member_id: &str) -> NmResult<()> {
+        self.backend().await?.coord.call(member_id).await
+    }
+
+    /// Bloqueio por versão mínima (só com a coordenação respondendo).
+    pub fn exigir_versao_minima(&self) -> NmResult<()> {
+        let st = self.status();
+        match st.versao_minima {
+            Some(minima) if st.desatualizado => Err(NmError::AppOutdated { atual: crate::APP_VERSION.into(), minima }),
+            _ => Ok(()),
+        }
+    }
+
     pub async fn play_with(self: &Arc<Self>, trigger: PlayTrigger, open_game: bool) -> NmResult<()> {
+        // abaixo da versão mínima: não abre, não assume numa troca, não acorda o mundo
+        if let Err(e) = self.exigir_versao_minima() {
+            if trigger == PlayTrigger::Button {
+                self.set_status(|s| s.last_error = Some(e.human()));
+            }
+            return Err(e);
+        }
         let _op = self.op.try_lock().map_err(|_| NmError::Other(anyhow::anyhow!("já tem uma operação em andamento")))?;
         if self.session.lock().await.is_some() {
             if open_game {
@@ -1075,6 +1140,7 @@ impl Engine {
     }
 
     async fn play_inner(self: &Arc<Self>, trigger: PlayTrigger, open_game: bool) -> NmResult<()> {
+        let t0 = tokio::time::Instant::now();
         let cfg = self.config.read().await.clone();
         if !cfg.setup_complete {
             return Err(NmError::NotConfigured("termine a configuração primeiro".into()));
@@ -1119,6 +1185,7 @@ impl Engine {
             lm.acquire(req).await?
         };
         let session_number = guard.session_number();
+        tracing::info!(segundos = t0.elapsed().as_secs_f32(), ?trigger, "abrir: vez conseguida");
 
         let started_at = Utc::now();
         // Daqui em diante, qualquer erro precisa soltar a vez (o mundo ainda não mudou).
@@ -1147,7 +1214,10 @@ impl Engine {
         }
         .await;
         let (head_before, java, rcon_password) = match prepared {
-            Ok(x) => x,
+            Ok(x) => {
+                tracing::info!(segundos = t0.elapsed().as_secs_f32(), "abrir: mundo e servidor conferidos");
+                x
+            }
             Err(e) => {
                 let _ = guard.release().await;
                 return Err(e);
@@ -1174,6 +1244,7 @@ impl Engine {
         let lines = proc.subscribe_lines();
         self.forward_console(lines);
         let ready = proc.wait_ready(proc.subscribe(), Duration::from_secs(600)).await;
+        tracing::info!(segundos = t0.elapsed().as_secs_f32(), ok = ready.is_ok(), "abrir: servidor respondeu");
         if let Err(e) = ready {
             tracing::error!(error = %e, "servidor não abriu");
             let _ = proc.stop(Duration::from_secs(60)).await;
@@ -1277,7 +1348,7 @@ impl Engine {
     /// com a entrada "pAuletOr 3" pronta na lista de servidores.
     pub async fn open_game(self: &Arc<Self>) {
         let cfg = self.config.read().await.clone();
-        if launcher::client_running(None) {
+        if self.client_alive.load(Ordering::SeqCst) || self.status().client_starting || launcher::client_running(None) {
             return;
         }
         if cfg.launches_directly() {
@@ -1308,6 +1379,7 @@ impl Engine {
     fn client_task(self: &Arc<Self>, launch: bool) {
         if launch {
             self.client_launch_wanted.store(true, Ordering::SeqCst);
+            self.set_status(|s| s.client_starting = true);
         }
         if self.client_busy.swap(true, Ordering::SeqCst) {
             return;
@@ -1321,6 +1393,7 @@ impl Engine {
                     let h = e.human();
                     me.set_status(|s| {
                         s.client_prep = None;
+                        s.client_starting = false;
                         if wanted || launch {
                             s.last_error = Some(h);
                         }
@@ -1373,12 +1446,24 @@ impl Engine {
             }
         }
         self.set_status(|s| s.client_prep = None);
-        if !self.client_launch_wanted.swap(false, Ordering::SeqCst) || launcher::client_running(None) {
+        if !self.client_launch_wanted.swap(false, Ordering::SeqCst) || self.client_alive.load(Ordering::SeqCst) || launcher::client_running(None) {
+            self.set_status(|s| s.client_starting = false);
             return Ok(());
         }
 
-        inst.prepare_game_dir(cfg.minecraft_dir.as_deref())?;
-        if let Err(e) = serversdat::ensure_entry(&inst.layout.game(), &cfg.game_address(), &self.paths.backups()) {
+        // versão escolhida da .minecraft (OptiFine, Fabric) por cima do vanilla conferido
+        let overlay = match (cfg.client_version.as_deref().filter(|v| !v.is_empty()), cfg.minecraft_dir.as_deref()) {
+            (Some(id), Some(mc)) => Some(crate::instancias::overlay(mc, id, &versions.minecraft).await?),
+            _ => None,
+        };
+        let game_dir = match &overlay {
+            Some(o) => o.game_dir.clone(),
+            None => {
+                inst.prepare_game_dir(cfg.minecraft_dir.as_deref())?;
+                inst.layout.game()
+            }
+        };
+        if let Err(e) = serversdat::ensure_entry(&game_dir, &cfg.game_address(), &self.paths.backups()) {
             tracing::warn!(error = %e, "não consegui criar a entrada no servers.dat do jogo");
         }
         let server_heap = self.is_hosting().await.then(|| crate::heap::effective_heap_mb(cfg.ram_mb));
@@ -1389,17 +1474,29 @@ impl Engine {
             heap_mb,
             quick_play: Some(cfg.game_address()),
         };
-        let args = inst.command_line(&opts)?;
+        let args = inst.command_line_with(&opts, overlay.as_ref())?;
         let log = self.paths.logs().join("minecraft-cliente.log");
         let mut child = client::spawn(&inst, &client::javaw(&java), &args, &log)?;
-        tracing::info!(pid = child.id(), heap_mb, "Minecraft aberto direto pelo app");
+        self.client_alive.store(true, Ordering::SeqCst);
+        self.set_status(|s| {
+            s.client_open = true;
+            s.client_starting = false;
+        });
+        tracing::info!(pid = child.id(), heap_mb, version = overlay.as_ref().map(|o| o.id.as_str()).unwrap_or("vanilla"), "Minecraft aberto direto pelo app");
         self.notice(NoticeLevel::Info, "Abrindo o Minecraft", &format!("Entrando em {} como {}.", cfg.world_name, cfg.player_name));
 
         // Vigia: se o jogo fechar com erro, avisa com o caminho do log.
         let events = self.events.clone();
+        let alive = self.client_alive.clone();
+        let weak = Arc::downgrade(self);
         std::thread::spawn(move || {
             let started = std::time::Instant::now();
-            if let Ok(st) = child.wait() {
+            let r = child.wait();
+            alive.store(false, Ordering::SeqCst);
+            if let Some(me) = weak.upgrade() {
+                me.set_status(|s| s.client_open = false);
+            }
+            if let Ok(st) = r {
                 tracing::info!(code = ?st.code(), secs = started.elapsed().as_secs(), "Minecraft fechou");
                 if !st.success() {
                     let body = match st.code() {
@@ -1411,6 +1508,11 @@ impl Engine {
             }
         });
         Ok(())
+    }
+
+    /// Versão do Minecraft do mundo (ex.: "1.21.11").
+    pub async fn world_minecraft_version(&self) -> String {
+        self.current_versions().await.minecraft
     }
 
     /// Versões fixadas do mundo (as embutidas se a nuvem não responder).
@@ -1720,12 +1822,35 @@ impl Engine {
             return false;
         }
         let me = self.my_id().await;
+        // troca planejada só para quem usa a mesma versão do app (a coordenação também confere)
+        let _ = self.refresh().await;
+        let same_version = self
+            .view
+            .read()
+            .await
+            .as_ref()
+            .map(|v| {
+                v.members.iter().any(|m| {
+                    m.id != me && players.contains(&m.nick) && m.presence.as_ref().map(|p| p.playing && p.app_version == crate::APP_VERSION).unwrap_or(false)
+                })
+            })
+            .unwrap_or(true);
+        if !same_version {
+            tracing::warn!("os amigos jogando usam outra versão do app; fechando o mundo em vez de passar o host");
+            self.notice(
+                NoticeLevel::Warning,
+                "Não deu para passar o host",
+                "Os amigos jogando estão em outra versão do app. O mundo vai ser salvo e fechado; quem atualizar pode abrir de novo.",
+            );
+            let _ = s.server.say("Vocês estão em outra versão do app: o host não pode ser passado. Salvando e fechando o mundo.").await;
+            return false;
+        }
         let started = tokio::time::Instant::now();
         *self.handoff_at.lock().unwrap() = Some(started);
         self.set_status(|st| st.failover = Some("Passando o host para quem está jogando...".into()));
         let _ = s.guard.update(None, Some(true)).await;
         self.journal.post(msg::handing_over(&cfg.player_name)).await;
-        self.diary_post("handover", Some(&cfg.player_name), format!("{} passou o host", cfg.player_name));
+        // o diário registra a troca do lado de quem assume, sempre com o destino ("X passou o host para Y")
         let _ = s
             .server
             .say("Trocando de host: em instantes vocês vão para a tela \"Entrando...\" e voltam sozinhos. Não saiam do jogo!")
@@ -1735,6 +1860,7 @@ impl Engine {
         if let Err(e) = self.checkpoint(s).await {
             tracing::warn!(error = %e, "salvamento antes de passar o host falhou; sigo com o envio final");
         }
+        tracing::info!(segundos = started.elapsed().as_secs_f32(), "troca: salvamento publicado");
         // 2) espera um amigo ter essa versão inteira (a réplica em segundo plano dele baixa e
         //    já aplica no mundo dele), para ele abrir em segundos
         //    (o prazo conta depois do salvamento: enquanto ele roda, todo mundo segue jogando)
@@ -1753,12 +1879,14 @@ impl Engine {
                 if !ready {
                     tracing::warn!("nenhum amigo confirmou a réplica a tempo; passando assim mesmo");
                 }
+                tracing::info!(segundos = started.elapsed().as_secs_f32(), amigo_pronto = ready, "troca: réplica do amigo conferida");
                 break;
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        // 3) os proxies dos amigos já viram a troca (o laço deles roda a cada 4 s)
-        let min = started + Duration::from_secs(10);
+        // 3) os proxies dos amigos já viram a troca (durante a troca, o laço deles roda a cada
+        //    1 s; a troca planejada só acontece entre apps da mesma versão)
+        let min = started + Duration::from_secs(5);
         if tokio::time::Instant::now() < min {
             tokio::time::sleep_until(min).await;
         }
@@ -1777,15 +1905,16 @@ impl Engine {
             let port = if *p == cfg.player_name { cfg.proxy_port } else { ports.get(p).copied().unwrap_or(crate::GAME_PORT) };
             let _ = s.server.cmd(&format!("transfer 127.0.0.1 {port} {p}")).await;
         }
+        tracing::info!(segundos = started.elapsed().as_secs_f32(), "troca: jogadores na sala de espera");
         tokio::time::sleep(Duration::from_secs(1)).await;
         true
     }
 
     /// Depois de passar o host: espera quem assumiu ter a versão final no disco (ela vem mais
     /// rápido por P2P deste PC do que da nuvem) antes de desligar a rede. No máximo `max`.
-    pub async fn wait_successor(self: &Arc<Self>, max: Duration) {
+    pub async fn wait_successor(self: &Arc<Self>, max: Duration) -> bool {
         if !self.handing_off() {
-            return;
+            return false;
         }
         let deadline = tokio::time::Instant::now() + max;
         let me = self.my_id().await;
@@ -1802,10 +1931,11 @@ impl Engine {
                 })
                 .unwrap_or(true);
             if done {
-                return;
+                return true;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
+        false
     }
 
     /// Encerra a sessão: para o servidor, envia o mundo e libera a vez (nessa ordem).
@@ -2063,6 +2193,73 @@ impl Engine {
         }
     }
 
+    /// O que este PC está fazendo com o mundo agora (para decidir se dá para instalar uma
+    /// atualização).
+    pub async fn momento(&self) -> crate::atualizacao::Momento {
+        let st = self.status();
+        let hosting = self.is_hosting().await;
+        crate::atualizacao::Momento {
+            hospedando: hosting || st.me_hosting,
+            fase_ocupada: !matches!(st.phase, Phase::Idle | Phase::WaitingTurn),
+            replicando: st.replicating || self.replicating.load(Ordering::SeqCst),
+            trocando: st.failover.is_some() || (hosting && self.handing_off()),
+            sincronizando: st.sync.is_some(),
+        }
+    }
+
+    /// Antes de instalar uma atualização: fecha a sessão deste PC do jeito seguro (passa o host
+    /// para quem joga, ou salva e envia tudo à nuvem) e só devolve `Ok` com o estado final
+    /// confirmado: um amigo com a versão final, ou o envio à nuvem terminado e conferido
+    /// (o HEAD da coordenação aponta para o manifesto que este PC acabou de publicar; o push
+    /// já conferiu cada objeto e o hash do manifesto).
+    ///
+    /// Passado `max` sem confirmação, devolve erro. O encerramento NUNCA é interrompido: ele
+    /// segue em segundo plano até o fim, e o mundo fica como estiver (seguro).
+    pub async fn encerrar_para_atualizar(self: &Arc<Self>, max: Duration) -> NmResult<crate::atualizacao::FimSeguro> {
+        use crate::atualizacao::FimSeguro;
+        let deadline = tokio::time::Instant::now() + max;
+        if !self.is_hosting().await {
+            if LocalState::load(&self.paths).dirty {
+                return Err(NmError::Other(anyhow::anyhow!("há um envio pendente neste PC; recupere antes de atualizar")));
+            }
+            return Ok(FimSeguro::NadaAberto);
+        }
+        let me = self.clone();
+        let task = tokio::spawn(async move { me.end_session(EndReason::UserStop).await });
+        match tokio::time::timeout_at(deadline, task).await {
+            Ok(Ok(r)) => r?,
+            Ok(Err(e)) => return Err(NmError::Other(anyhow::anyhow!("encerramento interrompido: {e}"))),
+            Err(_) => return Err(NmError::Other(anyhow::anyhow!("o mundo não terminou de fechar a tempo"))),
+        }
+        if self.is_hosting().await {
+            return Err(NmError::Other(anyhow::anyhow!("a sessão continua aberta")));
+        }
+        // (1) passou o host: um amigo já tem a versão final?
+        let handed = self.handing_off();
+        if handed {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if self.wait_successor(left).await {
+                return Ok(FimSeguro::AmigoConfirmou);
+            }
+        }
+        // (2) envio final à nuvem conferido
+        let st = LocalState::load(&self.paths);
+        if st.dirty {
+            return Err(NmError::Other(anyhow::anyhow!("o envio final não terminou")));
+        }
+        let se = self.sync_engine().await?;
+        let head = tokio::time::timeout_at(deadline, se.head())
+            .await
+            .map_err(|_| NmError::Other(anyhow::anyhow!("a nuvem não confirmou a tempo")))??;
+        match (head, st.current_manifest) {
+            (Some(h), Some(m)) if h.manifest == m => {
+                se.fetch_manifest(&m).await?;
+                Ok(FimSeguro::NuvemConferida)
+            }
+            _ => Err(NmError::Other(anyhow::anyhow!("a versão na nuvem não confere com a deste PC"))),
+        }
+    }
+
     /// Para a sessão a pedido (botão Parar, Sair, desligamento do Windows).
     pub async fn stop(self: &Arc<Self>, reason: EndReason) -> NmResult<()> {
         self.end_session(reason).await
@@ -2109,6 +2306,7 @@ impl Engine {
 
     /// "Assumir agora": espera a vez ficar livre (o host está salvando) e então hospeda aqui.
     pub async fn take_turn(self: &Arc<Self>, open_game: bool) -> NmResult<()> {
+        self.exigir_versao_minima()?;
         self.phase(Phase::WaitingTurn);
         let lm = self.lease_manager().await?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15 * 60);
@@ -2278,6 +2476,42 @@ impl Engine {
     }
 
     /// Restaura uma versão antiga (cria um manifesto novo; nada é apagado).
+    /// "Restaurar como cópia": a versão vira um mundo de single-player na `.minecraft/saves`,
+    /// para testar sem mexer no mundo do grupo. Devolve o nome da pasta criada.
+    pub async fn restore_as_copy(self: &Arc<Self>, manifest_id: String) -> NmResult<String> {
+        let cfg = self.config.read().await.clone();
+        let saves = cfg
+            .minecraft_dir
+            .clone()
+            .map(|m| m.join("saves"))
+            .ok_or_else(|| NmError::NotConfigured("escolha a pasta .minecraft em Configurações".into()))?;
+        let se = self.sync_engine().await?;
+        let m = se.fetch_manifest(&manifest_id).await?;
+        let name = format!("{} - cópia de {}", cfg.world_name, m.created_at.with_timezone(&chrono::Local).format("%d-%m %Hh%M"));
+        let name: String = name.chars().map(|c| if r#"<>:"/\|?*"#.contains(c) { '-' } else { c }).collect();
+        let tmp = self.paths.tmp().join(format!("copia-{}", uuid::Uuid::new_v4().simple()));
+        se.materialize_copy(&m, &tmp, self.progress()).await?;
+        self.set_status(|s| s.sync = None);
+        std::fs::create_dir_all(&saves)?;
+        let dest = saves.join(&name);
+        if dest.exists() {
+            let _ = util::remove_dir_all_retry(&tmp);
+            return Err(NmError::Other(anyhow::anyhow!("já existe uma cópia com esse nome em saves")));
+        }
+        // a pasta do mundo vira o save; o resto (whitelist, ops...) é do servidor
+        let world = tmp.join("world");
+        let moved = std::fs::rename(&world, &dest).or_else(|_| crate::util::copy_dir_all(&world, &dest));
+        let _ = util::remove_dir_all_retry(&tmp);
+        moved?;
+        tracing::info!(pasta = %dest.display(), "versão copiada para o single-player");
+        Ok(name)
+    }
+
+    /// Números do vanilla (blocos, distância, mortes, mobs) da cópia do mundo neste PC.
+    pub fn numeros(&self) -> crate::numeros::Numeros {
+        crate::numeros::ler(&self.paths.server())
+    }
+
     pub async fn restore(self: &Arc<Self>, manifest_id: String) -> NmResult<()> {
         let player = self.config.read().await.player_name.clone();
         let me = self.clone();

@@ -23,6 +23,8 @@ struct MemWorld {
     invites: BTreeMap<String, (String, Invite)>, // token -> (id, invite)
     events: Vec<DiaryEvent>,
     private: PrivateSettings,
+    versao_minima: Option<String>,
+    calls: BTreeMap<String, Chamado>,
 }
 
 /// Relógio controlável (os testes avançam o tempo sem dormir).
@@ -138,6 +140,11 @@ impl MemCoordinator {
     pub fn set_offline(&self, v: bool) {
         self.offline.store(v, Ordering::SeqCst);
     }
+
+    /// Testes: versão mínima do app definida pelo dono na coordenação.
+    pub fn set_versao_minima(&self, v: Option<&str>) {
+        self.hub.world.lock().unwrap().versao_minima = v.map(str::to_string);
+    }
 }
 
 #[async_trait::async_trait]
@@ -172,6 +179,8 @@ impl Coordinator for MemCoordinator {
             members,
             now,
             me,
+            versao_minima: w.versao_minima.clone(),
+            chamado: None,
         })
     }
 
@@ -184,6 +193,10 @@ impl Coordinator for MemCoordinator {
             .iter()
             .map(|(id, (p, at))| SeenPresence { member: id, presence: p, at: *at })
             .collect();
+        if rules::handoff_version_conflict(now, w.lease.as_ref(), &self.me, &req.app_version) {
+            let host = w.lease.as_ref().map(|l| l.app_version.clone()).unwrap_or_default();
+            return Err(NmError::AppVersionMismatch { host, mine: req.app_version });
+        }
         match rules::decide_acquire(now, w.lease.as_ref(), &self.me, req.replica_seq, &seen) {
             AcquireDecision::Held(l) => Err(NmError::HeldBy(Box::new(l))),
             AcquireDecision::NotBest { best_seq } => Err(NmError::NotBestCandidate { best_seq }),
@@ -282,7 +295,11 @@ impl Coordinator for MemCoordinator {
             }
             w.presence.insert(self.me.clone(), (p.clone(), now));
         }
-        self.view().await
+        {
+            let mut v = self.view().await?;
+            v.chamado = self.guard()?.calls.remove(&self.me);
+            Ok(v)
+        }
     }
 
     async fn post_events(&self, events: &[DiaryEvent]) -> NmResult<()> {
@@ -355,6 +372,17 @@ impl Coordinator for MemCoordinator {
         let mut w = self.guard()?;
         self.owner(&w)?;
         w.private = s.clone();
+        Ok(())
+    }
+
+    async fn call(&self, to: &str) -> NmResult<()> {
+        let now = self.hub.clock.now();
+        let mut w = self.guard()?;
+        let de = self.member(&w)?.nick.clone();
+        if !w.members.contains_key(to) {
+            return Err(NmError::Forbidden("esse membro não está no mundo".into()));
+        }
+        w.calls.insert(to.to_string(), Chamado { de, em: now });
         Ok(())
     }
 }

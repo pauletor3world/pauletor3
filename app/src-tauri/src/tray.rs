@@ -102,7 +102,7 @@ pub fn describe(st: &Status) -> String {
     }
     match &st.lease {
         Some(LeaseStatus::Held { lease }) => format!("{} está hospedando · {} online", lease.player, lease.online.len()),
-        _ => "Livre — ninguém jogando".into(),
+        _ => "O mundo está dormindo — ninguém jogando".into(),
     }
 }
 
@@ -111,7 +111,8 @@ pub fn update(app: &AppHandle, st: &Status) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
     let kind: &'static str = if st.last_error.is_some() || st.recovery_pending {
         "problem"
-    } else if st.me_hosting {
+    } else if st.me_hosting || matches!(&st.lease, Some(LeaseStatus::Held { lease }) if lease.purpose == machencraft_core::coord::LeasePurpose::Hosting) {
+        // mundo aberto (aqui ou no PC de um amigo): ícone aceso
         "hosting"
     } else if !matches!(st.phase, Phase::Idle) {
         "busy"
@@ -130,7 +131,7 @@ pub fn update(app: &AppHandle, st: &Status) {
     let (play_text, play_on) = match &st.lease {
         _ if st.me_hosting => ("Abrir o Minecraft", true),
         Some(LeaseStatus::Held { lease }) if lease.handing_over => ("Assumir agora", idle),
-        Some(LeaseStatus::Held { .. }) => ("Jogar", true),
+        Some(LeaseStatus::Held { .. }) => ("Entrar", true),
         _ => ("Jogar", idle && st.configured),
     };
     let _ = items.play.set_text(play_text);

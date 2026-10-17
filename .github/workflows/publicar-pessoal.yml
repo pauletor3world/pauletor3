@@ -1,0 +1,69 @@
+# Gera o BUILD PESSOAL (--features personal, modo offline) e publica no Worker do dono:
+# convites novos baixam esta versão e os apps abertos se atualizam sozinhos (até 1 h).
+# O instalador NÃO vai para o GitHub (nem release, nem artefato do workflow).
+#
+# Dispara ao enviar uma tag "v*" (ex.: v2.1.0). Segredos do repositório:
+#   TAURI_SIGNING_PRIVATE_KEY           conteúdo do arquivo da chave privada do updater
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  senha da chave
+#   COORDENACAO_URL                     endereço do Worker (ex.: https://...workers.dev)
+#   ADMIN_TOKEN                         chave de administração do Worker
+name: publicar build pessoal
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      canal:
+        description: "Canal (estavel ou teste)"
+        required: false
+        default: "estavel"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publicar-pessoal
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: versão igual em todos os arquivos (e na tag)
+        run: node scripts/conferir-versao.mjs "${{ github.ref_name }}"
+      - name: notas da versão (CHANGELOG.md ou mensagem da tag)
+        shell: bash
+        run: |
+          VERSAO=$(node -p "require('./app/src-tauri/tauri.conf.json').version")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+            export NOTAS_DA_TAG="$(git tag -l --format='%(contents)' "${GITHUB_REF_NAME}")"
+          fi
+          node scripts/notas-da-versao.mjs "$VERSAO" > "$RUNNER_TEMP/notas.md"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: dependências da interface
+        working-directory: app
+        run: npm ci
+      - name: compilar o instalador (build pessoal, assinado)
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --features personal
+      - name: publicar no Worker
+        shell: pwsh
+        env:
+          COORDENACAO_URL: ${{ secrets.COORDENACAO_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: >
+          ./scripts/publicar-app.ps1 -SemCompilar
+          -Canal "${{ github.event.inputs.canal || 'estavel' }}"
+          -ArquivoNotas "$env:RUNNER_TEMP/notas.md"

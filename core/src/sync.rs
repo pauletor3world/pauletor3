@@ -599,6 +599,23 @@ impl SyncEngine {
         Ok(())
     }
 
+    /// Monta uma versão numa pasta nova e separada (ex.: cópia para o single-player), sem tocar
+    /// no mundo deste PC nem no índice de hashes. `target` não pode existir.
+    pub async fn materialize_copy(&self, m: &Manifest, target: &Path, progress: SyncProgressFn) -> NmResult<()> {
+        if target.exists() {
+            return Err(NmError::Other(anyhow::anyhow!("a pasta {} já existe", target.display())));
+        }
+        self.fetch_objects(m, progress.clone()).await?;
+        let cache = self.paths.cache_objects();
+        let m2 = m.clone();
+        let asm = target.to_path_buf();
+        let r = tokio::task::spawn_blocking(move || assemble(&m2, &cache, &asm, progress)).await.map_err(|e| anyhow::anyhow!(e))?;
+        if r.is_err() {
+            let _ = util::remove_dir_all_retry(target);
+        }
+        r
+    }
+
     /// Baixa para o cache os objetos que faltam, conferindo o hash de cada um.
     async fn fetch_objects(&self, m: &Manifest, progress: SyncProgressFn) -> NmResult<()> {
         let cache = self.paths.cache_objects();

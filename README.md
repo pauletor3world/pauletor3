@@ -2,13 +2,13 @@
 
 # Machen Craft
 
-O app que mantém o mundo de Minecraft da turma sempre no ar entre amigos, sem pagar host e sem ninguém mexer em rede. O mundo configurado hoje é o **pAuletOr 3**.
+O app que mantém o mundo de Minecraft do grupo sempre no ar entre amigos, sem pagar host e sem ninguém mexer em rede. O mundo configurado hoje é o **pAuletOr 3**.
 
 - **Um botão:** quem clica em **Jogar** entra no mundo. Se alguém já hospeda, o app leva até ele; se ninguém hospeda, o mundo acorda no PC de quem clicou.
 - **Sempre o mesmo endereço:** no Minecraft, o mundo é `localhost` (entrada com o nome do mundo, **pAuletOr 3**, no Multiplayer). O app de cada PC encaminha para quem estiver hospedando.
 - **Troca automática de host:** se o host cai (luz, internet, PC desligado), um amigo que estava jogando assume sozinho, a partir do último salvamento (no máximo 1–5 min de perda, configurável).
 - **Nada de VPN, porta, IP ou conta de terceiros para os amigos:** a rede P2P (iroh) vem embutida no app; o amigo só abre o link do convite.
-- **Mundo protegido:** cópia em cada PC da turma + cópia cifrada na nuvem do dono (Cloudflare grátis). Versões nunca são apagadas sem regra; dá para restaurar qualquer uma.
+- **Mundo protegido:** cópia em cada PC do grupo + cópia cifrada na nuvem do dono (Cloudflare grátis). Versões nunca são apagadas sem regra; dá para restaurar qualquer uma.
 - **Jogabilidade 100% vanilla:** Minecraft Java **1.21.11**, servidor Fabric + Lithium (só no servidor), cliente vanilla.
 
 Não afiliado à Mojang nem à Microsoft.
