@@ -12,7 +12,9 @@
 #
 # A chave fica também em scripts\.cache\coordenacao.txt (fora do Git). Não compartilhe.
 
-$ErrorActionPreference = "Stop"
+# "Continue": no PowerShell 5.1, qualquer aviso que o npm/npx escreve no stderr (ex.: "npm warn")
+# viraria erro fatal com "Stop". Cada comando confere o $LASTEXITCODE logo depois.
+$ErrorActionPreference = "Continue"
 $root = Split-Path -Parent $PSScriptRoot
 $coord = Join-Path $root "coordinator"
 $cache = Join-Path $PSScriptRoot ".cache"
@@ -69,7 +71,7 @@ try {
   $ok = $false
   for ($i = 0; $i -lt 10 -and -not $ok; $i++) {
     try {
-      $h = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 10
+      $h = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 10 -ErrorAction Stop
       if ($h.ok) { $ok = $true }
     } catch { Start-Sleep -Seconds 3 }
   }
