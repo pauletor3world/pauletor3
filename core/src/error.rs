@@ -32,6 +32,9 @@ pub enum NmError {
     #[error("a nuvem não respondeu: {0}")]
     Remote(String),
 
+    #[error("a nuvem do mundo está cheia: {0}")]
+    CloudFull(String),
+
     #[error("sem permissão: {0}")]
     Forbidden(String),
 
@@ -86,6 +89,7 @@ impl NmError {
             NmError::VersionMismatch(_) => "version_mismatch",
             NmError::Integrity(_) => "integrity",
             NmError::Remote(_) => "remote",
+            NmError::CloudFull(_) => "cloud_full",
             NmError::Forbidden(_) => "forbidden",
             NmError::P2p(_) => "p2p",
             NmError::NotConfigured(_) => "not_configured",
@@ -111,6 +115,7 @@ impl NmError {
             NmError::VersionMismatch(_) => ("As versões do servidor não batem".into(), None),
             NmError::Integrity(_) => ("Um arquivo do mundo veio diferente do esperado".into(), None),
             NmError::Remote(_) => ("Não consegui falar com a nuvem do mundo".into(), None),
+            NmError::CloudFull(_) => ("A nuvem do mundo está cheia".into(), None),
             NmError::Forbidden(_) => ("Você ainda não tem acesso a isso".into(), None),
             NmError::P2p(_) => ("Não consegui conectar com o PC do amigo".into(), None),
             NmError::NotConfigured(_) => ("Falta terminar a configuração".into(), None),

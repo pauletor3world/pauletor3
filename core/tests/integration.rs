@@ -462,7 +462,7 @@ async fn gc_keeps_what_is_referenced() {
     // lixo: objeto órfão de um envio interrompido
     fs.write(&format!("objects/{}", "f".repeat(64)), b"orfao").await.unwrap();
 
-    let policy = Policy { last_sessions: 2, daily_days: 0 };
+    let policy = Policy { last_sessions: 2, daily_days: 0, budget_bytes: u64::MAX };
     assert_eq!(retention::gc(&se, &g, policy, true).await.unwrap().manifests_deleted, 2);
     let rep = retention::gc(&se, &g, policy, false).await.unwrap();
     assert_eq!(rep.manifests_deleted, 2);

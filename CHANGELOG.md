@@ -4,6 +4,14 @@ As notas de cada versão aparecem para quem usa o app, no aviso "Atualização d
 Escreva em português, curto e do ponto de vista de quem joga. Formato: uma seção
 `## [X.Y.Z]` por versão, a mais nova em cima.
 
+## [2.2.1]
+
+- **A nuvem do mundo não enche mais.** O app limpa sozinho as versões antigas depois de cada
+  sessão, sempre guardando o mundo atual e as versões mais recentes. Se mesmo assim a nuvem
+  encher no meio de um salvamento, ele libera espaço e salva na hora.
+- Corrigido: depois que alguém caía e ninguém estava jogando, o app ficava mostrando
+  "Trocando de host" para sempre. Agora mostra o mundo livre, pronto para jogar.
+
 ## [2.2.0]
 
 - **Novo nome: Machenia.** Mesmo app, mesmo mundo, nome novo. A atualização troca tudo

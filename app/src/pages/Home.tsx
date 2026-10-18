@@ -258,7 +258,7 @@ export default function HomePage({ status, onPage, toast }: { status: Status | n
       <ErrorBanner
         error={err}
         onClose={() => setError(null)}
-        action={err?.code === "remote" || err?.code === "p2p" ? <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button> : undefined}
+        action={err?.code === "remote" || err?.code === "cloud_full" || err?.code === "p2p" ? <Button onClick={() => onPage("health")}>Abrir Saúde do sistema</Button> : undefined}
       />
 
       {/* ---------------------------------------------------------------- sessão (host) */}

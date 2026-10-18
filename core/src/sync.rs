@@ -320,7 +320,19 @@ impl SyncEngine {
                     files_total: t.files_total,
                 })
             });
-            self.remote.upload_many(&cache, &missing, layout::OBJECTS, pf).await?;
+            match self.remote.upload_many(&cache, &missing, layout::OBJECTS, pf.clone()).await {
+                // Nuvem cheia: com a vez na mão, apaga versões antigas e tenta de novo (uma vez).
+                Err(NmError::CloudFull(msg)) if guard.is_some() => {
+                    tracing::warn!(%msg, "nuvem cheia; liberando espaço antes de tentar de novo");
+                    let r = crate::retention::gc(self, guard.unwrap(), crate::retention::Policy::emergency(), false).await?;
+                    tracing::info!(?r, "espaço liberado");
+                    let now: HashMap<String, u64> =
+                        self.remote.list(layout::OBJECTS).await?.into_iter().map(|e| (e.name, e.size)).collect();
+                    let still: Vec<String> = missing.iter().filter(|h| now.get(*h) != Some(&sizes[*h])).cloned().collect();
+                    self.remote.upload_many(&cache, &still, layout::OBJECTS, pf).await?;
+                }
+                r => r?,
+            }
         }
 
         // 6) confirma que TODOS os objetos do manifesto estão no remote com o tamanho certo

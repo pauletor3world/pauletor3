@@ -844,7 +844,10 @@ impl Engine {
                 // a vez é minha e o servidor ainda está abrindo (ou passando para um amigo)
                 LeaseStatus::Held { .. } => hold("§eO mundo está abrindo §7— pode entrar e esperar", false),
                 LeaseStatus::Free { previous: Some(prev) }
-                    if prev.holder != me && prev.purpose == LeasePurpose::Hosting && (prev.handing_over || recently_playing) =>
+                    if prev.holder != me
+                        && prev.purpose == LeasePurpose::Hosting
+                        && recent_fall(prev, view.now)
+                        && (prev.handing_over || recently_playing) =>
                 {
                     changing(&prev.player)
                 }
@@ -869,7 +872,9 @@ impl Engine {
         let idle = self.status().phase == Phase::Idle && !hosting;
         if free && idle {
             let (host_fell, planned) = match &view.lease {
-                LeaseStatus::Free { previous: Some(p) } if p.holder != me && p.purpose == LeasePurpose::Hosting => (true, p.handing_over),
+                LeaseStatus::Free { previous: Some(p) } if p.holder != me && p.purpose == LeasePurpose::Hosting && recent_fall(p, view.now) => {
+                    (true, p.handing_over)
+                }
                 _ => (false, false),
             };
             // quem passou o host não acorda o mundo de volta para si
@@ -992,8 +997,9 @@ impl Engine {
             LeaseStatus::Held { lease } => lease.online.clone(),
             _ => vec![],
         };
+        // Só é "troca" logo depois da queda; uma vez expirada há horas é só mundo livre.
         let failover = match &view.lease {
-            LeaseStatus::Free { previous: Some(p) } if p.purpose == LeasePurpose::Hosting && p.holder != me => Some(if p.handing_over {
+            LeaseStatus::Free { previous: Some(p) } if p.purpose == LeasePurpose::Hosting && p.holder != me && recent_fall(p, view.now) => Some(if p.handing_over {
                 format!("{} passou o host. Trocando...", p.player)
             } else {
                 format!("{} saiu de repente. Trocando de host...", p.player)
@@ -2162,7 +2168,7 @@ impl Engine {
         let recent = std::fs::read_to_string(&marker)
             .ok()
             .and_then(|t| t.trim().parse::<DateTime<Utc>>().ok())
-            .map(|t| Utc::now() - t < chrono::Duration::hours(20))
+            .map(|t| Utc::now() - t < chrono::Duration::hours(1))
             .unwrap_or(false);
         if recent {
             return;
@@ -2696,6 +2702,11 @@ impl Engine {
     pub async fn lease(&self) -> NmResult<Option<LeaseInfo>> {
         Ok(self.lease_manager().await?.status().await?.held().cloned())
     }
+}
+
+/// A vez caiu agora há pouco? (Depois disso, uma vez expirada é só mundo livre, não troca.)
+fn recent_fall(prev: &LeaseInfo, now: DateTime<Utc>) -> bool {
+    now < prev.expires_at(crate::coord::rules::ttl()) + chrono::Duration::minutes(3)
 }
 
 fn hold(motd: &str, wake: bool) -> Route {

@@ -5,8 +5,11 @@
 //! - o manifesto final (o mais recente) de cada uma das últimas 20 sessões;
 //! - o manifesto mais recente de cada dia, nos últimos 30 dias.
 //!
+//! Se o que sobra passar do orçamento de espaço (a nuvem grátis tem limite), as versões mais
+//! antigas saem primeiro, até caber; o HEAD fica sempre.
+//!
 //! O GC apaga os manifestos fora dessa lista e depois os objetos que nenhum manifesto mantido
-//! referencia. Só roda com a vez em modo manutenção, ou seja, com ninguém hospedando.
+//! referencia. Só roda com a vez (de quem hospeda ou de manutenção).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -23,11 +26,21 @@ use crate::{NmError, NmResult};
 pub struct Policy {
     pub last_sessions: usize,
     pub daily_days: i64,
+    /// Teto do que fica na nuvem (bytes). Acima disso, as versões mais antigas saem.
+    pub budget_bytes: u64,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Self { last_sessions: 20, daily_days: 30 }
+        // a coordenação aceita até 4 GB; deixa folga para a próxima sessão subir
+        Self { last_sessions: 20, daily_days: 30, budget_bytes: 2_600_000_000 }
+    }
+}
+
+impl Policy {
+    /// Nuvem cheia no meio de um envio: libera bem mais, para o salvamento caber.
+    pub fn emergency() -> Self {
+        Self { last_sessions: 3, daily_days: 1, budget_bytes: 1_800_000_000 }
     }
 }
 
@@ -115,11 +128,29 @@ pub async fn gc(engine: &SyncEngine, guard: &LeaseGuard, policy: Policy, dry_run
         }
     }
 
-    let mut live: HashSet<String> = HashSet::new();
-    for id in &keep {
-        live.extend(engine.fetch_manifest(id).await?.object_hashes());
-    }
     let objects = engine.remote_objects().await?;
+    let mut refs: BTreeMap<String, HashSet<String>> = BTreeMap::new();
+    for id in &keep {
+        refs.insert(id.clone(), engine.fetch_manifest(id).await?.object_hashes().into_iter().collect());
+    }
+    // Orçamento: tira a versão mantida mais antiga (nunca o HEAD) até caber.
+    let head_id = head.as_ref().map(|h| h.manifest.clone());
+    let mut keep = keep;
+    let size_of = |refs: &BTreeMap<String, HashSet<String>>| -> u64 {
+        let all: HashSet<&String> = refs.values().flatten().collect();
+        all.into_iter().map(|h| objects.get(h).copied().unwrap_or(0)).sum()
+    };
+    while size_of(&refs) > policy.budget_bytes {
+        let oldest = summaries
+            .iter()
+            .filter(|m| keep.contains(&m.id) && Some(&m.id) != head_id.as_ref())
+            .min_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)))
+            .map(|m| m.id.clone());
+        let Some(o) = oldest else { break };
+        keep.remove(&o);
+        refs.remove(&o);
+    }
+    let live: HashSet<String> = refs.into_values().flatten().collect();
     let dead: Vec<(String, u64)> = objects
         .iter()
         .filter(|(h, _)| !live.contains(*h))
@@ -178,7 +209,7 @@ mod tests {
                 ms.push(s(&format!("old-{i:02}-{c}"), &format!("old{i:02}"), base + Duration::minutes(c * 15)));
             }
         }
-        let policy = Policy { last_sessions: 20, daily_days: 30 };
+        let policy = Policy { last_sessions: 20, daily_days: 30, budget_bytes: u64::MAX };
         let keep = select_keep(&ms, Some("old-00-0"), policy, now);
         // HEAD + finais das 20 sessões mais recentes (old05..old24)
         assert!(keep.contains("old-00-0"));
@@ -196,7 +227,7 @@ mod tests {
                 recent.push(s(&format!("d{d:02}-{c}"), &format!("day{d:02}x{c}"), at));
             }
         }
-        let keep = select_keep(&recent, None, Policy { last_sessions: 0, daily_days: 30 }, now);
+        let keep = select_keep(&recent, None, Policy { last_sessions: 0, daily_days: 30, budget_bytes: u64::MAX }, now);
         assert!(keep.contains("d00-1"));
         assert!(!keep.contains("d00-0"));
         assert!(keep.contains("d29-1"));

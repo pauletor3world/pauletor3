@@ -139,7 +139,7 @@ impl ApiClient {
             "format_too_new" => NmError::FormatTooNew { found: 0 },
             "app_version_mismatch" => NmError::AppVersionMismatch { host: e.host_version.unwrap_or_default(), mine: crate::APP_VERSION.into() },
             "app_outdated" => NmError::AppOutdated { atual: crate::APP_VERSION.into(), minima: e.versao_minima.unwrap_or_default() },
-            "quota" => NmError::Remote(format!("a nuvem do mundo está cheia: {msg}")),
+            "quota" => NmError::CloudFull(msg),
             _ if status.is_server_error() || status.as_u16() == 429 => NmError::Remote(msg),
             _ => NmError::Remote(format!("{status}: {msg}")),
         }

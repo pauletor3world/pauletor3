@@ -79,6 +79,11 @@ impl Remote for CloudRemote {
                                 last = None;
                                 break;
                             }
+                            // nuvem cheia não melhora tentando de novo
+                            Err(e @ NmError::CloudFull(_)) => {
+                                last = Some(e);
+                                break;
+                            }
                             Err(e) => {
                                 tracing::warn!(attempt, %name, error = %e, "envio falhou; tentando de novo");
                                 last = Some(e);
