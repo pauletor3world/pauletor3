@@ -13,6 +13,8 @@ import type {
   LauncherCandidate,
   LevelInfo,
   ManifestSummary,
+  AddWorldDefaults,
+  Mundo,
   SettingsView,
   SetupSuggestion,
   Stats,
@@ -93,6 +95,14 @@ export const api = {
   testWebhook: (url?: string) => invoke<void>("test_webhook", { url }),
   quit: () => invoke<void>("quit_app"),
   hideWindow: () => invoke<void>("hide_window"),
+
+  // vários mundos
+  worlds: () => invoke<Mundo[]>("worlds_list"),
+  switchWorld: (dir: string) => invoke<void>("world_switch", { dir }),
+  removeWorld: (dir: string) => invoke<void>("world_remove", { dir }),
+  addWorldDefaults: () => invoke<AddWorldDefaults>("world_add_defaults"),
+  addWorldCreate: (args: { coordinator_url?: string; admin_token?: string; name: string; nick: string; folder?: string }) => invoke<void>("world_add_create", { args }),
+  addWorldJoin: (invite: string, nick: string) => invoke<JoinResult>("world_add_join", { invite, nick }),
 
   // primeira execução
   suggestDir: () => invoke<SetupSuggestion>("setup_suggest_dir"),

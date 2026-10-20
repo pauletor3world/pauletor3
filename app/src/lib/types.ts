@@ -281,6 +281,24 @@ export interface SetupSuggestion {
   local_world: string | null;
 }
 
+/** Um mundo deste PC (cada um com a sua pasta; um aberto por vez). */
+export interface Mundo {
+  dir: string;
+  name: string;
+  active: boolean;
+  owner: boolean;
+  ready: boolean;
+  player_name: string;
+  /** O primeiro mundo (guarda o Java e o Minecraft dos outros; não sai da lista). */
+  first: boolean;
+}
+
+export interface AddWorldDefaults {
+  coordinator_url: string | null;
+  has_admin_token: boolean;
+  player_name: string;
+}
+
 export interface AppInfo {
   version: string;
   configured: boolean;

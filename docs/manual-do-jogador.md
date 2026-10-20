@@ -29,6 +29,12 @@ Clique em **Jogar**. O app abre o Minecraft; no **Multiplayer**, entre em **pAul
 - **Grupo**: quem é membro e quem está online. O dono gera convites, aprova e remove pessoas.
 - **Diário**: quem entrou, mortes, conquistas e trocas de host. Em **Versões salvas** dá para restaurar qualquer versão (nada é apagado; vira uma versão nova).
 
+## Outros mundos
+
+- Clique no nome do mundo, no topo da barra lateral, e em **Adicionar mundo**: cole o convite de outro grupo (ou, se você tem a coordenação, crie/importe um mundo novo). Abrir um link de convite com o app já configurado faz o mesmo.
+- Um mundo fica aberto por vez: o escolhido nesse menu é o que aparece no Minecraft em `localhost`. Para trocar, pare o mundo (se estiver hospedando) e saia dele no jogo.
+- Cada mundo tem a sua pasta (`<pasta do app>\mundos\...`); o Java e o Minecraft são baixados uma vez só. **Tirar da lista** (o X ao lado do nome) não apaga nada nem tira você do grupo.
+
 ## Problemas
 
 Abra **Saúde**: cada item vermelho ou amarelo tem um botão de correção. Se não resolver, clique em **Copiar diagnóstico** e mande para o dono.

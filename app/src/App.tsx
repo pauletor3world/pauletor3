@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { NotificationBell, UpdateGate, UpdatedBanner, type NoticeItem } from "./components/Atualizacao";
 import { Sidebar, ThemeToggle, TitleBar, Toasts, type Page } from "./components/Chrome";
+import { AddWorldModal } from "./components/Mundos";
 import { Modal } from "./components/ui";
 import { api } from "./lib/api";
 import { atualizacaoApi, temAtualizacao, useAtualizacao } from "./lib/atualizacao";
@@ -27,6 +28,10 @@ export default function App() {
   const [bellOpen, setBellOpen] = useState(() => import.meta.env.DEV && new URLSearchParams(location.search).has("bell"));
   const [notices, setNotices] = useState<NoticeItem[]>([]);
   const [healthBad, setHealthBad] = useState(false);
+  // Adicionar mundo (menu de mundos ou link de convite com o app já configurado)
+  const [adding, setAdding] = useState<{ invite: string | null } | null>(null);
+  // muda a cada troca de mundo: as páginas montam de novo com os dados do outro mundo
+  const [worldKey, setWorldKey] = useState("");
   const { toasts, dismiss, push } = useToasts();
   const status = useStatus(!!info?.configured);
   // Atualização do app: o serviço em Rust procura ao abrir e a cada 1 h e baixa sozinho.
@@ -59,6 +64,28 @@ export default function App() {
   useEffect(() => {
     if (shown) api.appReady();
   }, [shown]);
+
+  // troca de mundo: volta ao Início, com tudo relido
+  useEffect(() => {
+    const un = listen<string>("p3://world-changed", (e) => {
+      setWorldKey(e.payload);
+      setNotices([]);
+      setPage("home");
+      loadInfo().catch(() => {});
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [loadInfo]);
+
+  // convite aberto com o app já configurado: é mais um mundo
+  useEffect(() => {
+    if (!info?.configured) return;
+    const un = listen<string>("p3://invite", (e) => setAdding({ invite: e.payload }));
+    return () => {
+      un.then((f) => f());
+    };
+  }, [info?.configured]);
 
   // histórico do sino ("Nover abriu o mundo", ...)
   useEffect(() => {
@@ -113,6 +140,8 @@ export default function App() {
         status={status}
         updateAvailable={temAtualizacao(upd.a)}
         onUpdate={() => setBellOpen(true)}
+        onAddWorld={() => setAdding({ invite: null })}
+        toast={push}
       />
       <div className="flex-1 min-w-0 flex flex-col">
         <TitleBar
@@ -124,7 +153,7 @@ export default function App() {
           }
         />
         <main className="flex-1 min-h-0 scroll">
-          <div className="max-w-[1080px] mx-auto px-8 pt-3 pb-6">
+          <div key={worldKey} className="max-w-[1080px] mx-auto px-8 pt-3 pb-6">
             {upd.a?.acabou_de_atualizar && <UpdatedBanner versao={upd.a.acabou_de_atualizar} onClose={() => atualizacaoApi.visto()} />}
             {bloqueado && update ? (
               <UpdateGate {...update} />
@@ -144,6 +173,7 @@ export default function App() {
         </main>
       </div>
       <Toasts toasts={toasts} dismiss={dismiss} />
+      <AddWorldModal open={!!adding} initialInvite={adding?.invite} onClose={() => setAdding(null)} toast={push} />
       <Modal open={quitting} title="Salvando o mundo antes de sair" onClose={() => {}}>
         <div className="flex items-center gap-3 py-2">
           <Loader2 className="size-5 animate-spin text-sun-400 shrink-0" />

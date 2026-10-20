@@ -126,6 +126,27 @@ impl Config {
         self.coordinator_url.is_some() && self.world_id.is_some()
     }
 
+    /// Config de um mundo a mais neste PC: as preferências do PC (Minecraft, memória, avisos,
+    /// atualização...) vêm deste; o que é do mundo (coordenação, dono, nome) começa do zero.
+    pub fn for_new_world(&self) -> Self {
+        Self {
+            player_name: self.player_name.clone(),
+            minecraft_dir: self.minecraft_dir.clone(),
+            launcher_path: self.launcher_path.clone(),
+            direct_launch: self.direct_launch,
+            ram_mb: self.ram_mb,
+            client_ram_mb: self.client_ram_mb,
+            proxy_port: self.proxy_port,
+            notify_toasts: self.notify_toasts,
+            notify_join_leave: self.notify_join_leave,
+            eula_accepted: self.eula_accepted,
+            canal_atualizacao: self.canal_atualizacao.clone(),
+            client_version: self.client_version.clone(),
+            endpoint_atualizacao: self.endpoint_atualizacao.clone(),
+            ..Self::default()
+        }
+    }
+
     pub fn is_valid_player_name(name: &str) -> bool {
         (3..=16).contains(&name.len()) && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     }
@@ -148,5 +169,14 @@ mod tests {
         let old: Config = serde_json::from_str(r#"{"player_name":"Ana","duckdns_domain":"x"}"#).unwrap();
         assert_eq!(old.player_name, "Ana");
         assert_eq!(old.checkpoint_minutes, 5);
+    }
+
+    #[test]
+    fn new_world_keeps_pc_preferences() {
+        let mut c = Config { player_name: "Ana".into(), is_owner: true, world_id: Some("abc".into()), client_ram_mb: Some(4096), setup_complete: true, ..Config::default() };
+        c.coordinator_url = Some("https://x".into());
+        let n = c.for_new_world();
+        assert_eq!((n.player_name.as_str(), n.client_ram_mb), ("Ana", Some(4096)));
+        assert!(!n.is_owner && !n.ready() && n.world_id.is_none() && n.coordinator_url.is_none());
     }
 }

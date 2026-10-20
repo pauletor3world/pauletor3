@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   Moon,
-  Plus,
   Sun,
   Globe2,
   History,
@@ -20,12 +19,13 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { heldLease, humanState } from "../lib/format";
 import type { Toast } from "../lib/hooks";
 import type { Status } from "../lib/types";
 import { Avatar } from "./Avatar";
-import { Dot, cx } from "./ui";
+import { WorldSwitcher } from "./Mundos";
+import { cx } from "./ui";
 
 export type Page = "home" | "world" | "timeline" | "stats" | "health" | "logs" | "players" | "settings";
 
@@ -120,6 +120,8 @@ export function Sidebar({
   status,
   updateAvailable,
   onUpdate,
+  onAddWorld,
+  toast,
 }: {
   page: Page;
   onPage: (p: Page) => void;
@@ -130,6 +132,8 @@ export function Sidebar({
   /** Rodapé vira "Atualização disponível" (abre o cartão de atualização). */
   updateAvailable?: boolean;
   onUpdate?: () => void;
+  onAddWorld: () => void;
+  toast: (t: Omit<Toast, "id" | "type">) => void;
 }) {
   const st = status ? humanState(status) : null;
   const short = !status
@@ -160,14 +164,6 @@ export function Sidebar({
       // só uma preferência de tela
     }
   };
-  const [worlds, setWorlds] = useState(false);
-  const worldsRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!worlds) return;
-    const fora = (e: MouseEvent) => worldsRef.current && !worldsRef.current.contains(e.target as Node) && setWorlds(false);
-    window.addEventListener("mousedown", fora);
-    return () => window.removeEventListener("mousedown", fora);
-  }, [worlds]);
   const item = (n: (typeof NAV)[number]) => {
     const active = page === n.id;
     return (
@@ -192,39 +188,7 @@ export function Sidebar({
         <Brand open={!!status && (status.me_hosting || heldLease(status.lease)?.purpose === "hosting")} />
       </div>
 
-      {/* seletor de mundos (hoje um; pronto para os planos com mais mundos) */}
-      <div ref={worldsRef} className="relative mx-3 mb-4">
-        <button
-          onClick={() => setWorlds((v) => !v)}
-          aria-expanded={worlds}
-          className="w-full flex items-center gap-3 rounded-xl px-3 py-2.5 text-left bg-white/[0.04] hover:bg-white/[0.07] ring-1 ring-inset ring-white/[0.05] transition-colors cursor-pointer"
-        >
-          <Dot tone={st?.tone ?? "free"} />
-          <span className="min-w-0 flex-1">
-            <span className="block text-[13.5px] font-bold text-ink truncate">{status?.world_name ?? "Seu mundo"}</span>
-            <span className="block text-[12px] text-ink-muted truncate">{short}</span>
-          </span>
-          <ChevronDown className={cx("size-4 text-ink-faint transition-transform", worlds && "rotate-180")} />
-        </button>
-        {worlds && (
-          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 rounded-xl bg-night-800 ring-1 ring-white/10 shadow-[var(--shadow-pop)] p-1.5 animate-pop">
-            <button
-              onClick={() => {
-                setWorlds(false);
-                onPage("home");
-              }}
-              className="w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left bg-white/[0.06] cursor-pointer"
-            >
-              <Dot tone={st?.tone ?? "free"} />
-              <span className="text-[13px] font-semibold truncate">{status?.world_name ?? "Seu mundo"}</span>
-              <CheckCircle2 className="size-4 text-moss-400 ml-auto" />
-            </button>
-            <div className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] text-ink-faint" title="Mais de um mundo chega com os planos">
-              <Plus className="size-4" /> Outro mundo <span className="ml-auto text-[11px]">em breve</span>
-            </div>
-          </div>
-        )}
-      </div>
+      <WorldSwitcher name={status?.world_name ?? "Seu mundo"} tone={st?.tone ?? "free"} short={short} onAdd={onAddWorld} onHome={() => onPage("home")} toast={toast} />
 
       <div className="flex flex-col gap-0.5 px-3">{items.filter((n) => n.group === "daily").map(item)}</div>
       <div className="mx-6 my-3 h-px bg-white/[0.05]" />

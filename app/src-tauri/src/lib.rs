@@ -3,6 +3,7 @@
 
 mod atualizacao;
 mod commands;
+mod mundos;
 mod setup;
 mod tray;
 #[cfg(windows)]
@@ -31,6 +32,8 @@ pub struct AppState {
     pub pending_invite: Mutex<Option<String>>,
     /// Serviço de atualização do app (procura, baixa e instala no momento seguro).
     pub atualizacao: atualizacao::Servico,
+    /// Tarefas de fundo do mundo aberto (param na troca de mundo).
+    bg: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
     log_guard: Mutex<Option<tracing_appender_guard::Guard>>,
 }
 
@@ -53,7 +56,11 @@ pub fn open_engine(app: &AppHandle, data_dir: PathBuf) -> anyhow::Result<Arc<Eng
             return Ok(e);
         }
     }
-    let p = Paths::new(&data_dir);
+    // mundo a mais: o Java e o Minecraft ficam na pasta do primeiro
+    let p = match paths::worlds() {
+        Some(w) => w.paths(&data_dir),
+        None => Paths::new(&data_dir),
+    };
     p.ensure()?;
     {
         let mut g = state.log_guard.lock().unwrap();
@@ -118,8 +125,9 @@ fn event_sink(app: AppHandle) -> EventSink {
 /// Tarefas de fundo: diário, recuperação pendente e a rede (presença, proxy local, réplica e
 /// troca automática de host — o laço mora no núcleo).
 fn start_background(app: AppHandle, engine: Arc<Engine>) {
-    tauri::async_runtime::spawn(engine.journal.clone().run());
-    tauri::async_runtime::spawn(async move {
+    let journal = tauri::async_runtime::spawn(engine.journal.clone().run());
+    let app2 = app.clone();
+    let net = tauri::async_runtime::spawn(async move {
         let cfg = engine.config.read().await.clone();
         if !cfg.ready() {
             return;
@@ -141,8 +149,16 @@ fn start_background(app: AppHandle, engine: Arc<Engine>) {
         }
         // Minecraft conferido (e baixado se faltar) antes do primeiro Jogar
         engine.prefetch_client().await;
-        let _ = app;
+        let _ = app2;
     });
+    app.state::<AppState>().bg.lock().unwrap().extend([journal, net]);
+}
+
+/// Para as tarefas de fundo do mundo que está fechando (troca de mundo).
+pub fn stop_background(app: &AppHandle) {
+    for h in app.state::<AppState>().bg.lock().unwrap().drain(..) {
+        h.abort();
+    }
 }
 
 /// Recebe um link `machenia://entrar/...` (ou os antigos `machencraft://` e `pauletor3://`) do convite.
@@ -213,6 +229,7 @@ pub fn run() {
             start_minimized,
             pending_invite: Mutex::new(None),
             atualizacao: atualizacao::Servico::default(),
+            bg: Mutex::new(Vec::new()),
             log_guard: Mutex::new(None),
         })
         .setup(|app| {
@@ -311,6 +328,12 @@ pub fn run() {
             setup::ensure_serversdat,
             setup::prepare_runtime,
             setup::finish_setup,
+            mundos::worlds_list,
+            mundos::world_switch,
+            mundos::world_remove,
+            mundos::world_add_defaults,
+            mundos::world_add_create,
+            mundos::world_add_join,
         ])
         .build(tauri::generate_context!())
         .expect("erro ao iniciar o Machenia")

@@ -145,6 +145,11 @@ export function installMock(scene: string) {
     get_world_settings: { format: 1, world_name: "pAuletOr 3", motd: "pAuletOr 3", difficulty: "normal", gamemode: "survival", view_distance: 12, simulation_distance: 10, max_players: 10, pvp: true, hardcore: false, seed: "", spawn_protection: 0, allow_flight: false },
     console_history: ["[12:00:01] [Server thread/INFO]: Done (3.2s)!", "[12:04:10] [Server thread/INFO]: Sara_23 joined the game", "[12:09:44] [Server thread/WARN]: Can't keep up!"],
     detect_launchers: [], journal_status: { pending: 0, last_error: null, last_sent_at: null }, atualizacao_estado: atualizacao(scene),
+    worlds_list: [
+      { dir: "D:\\Machenia", name: "pAuletOr 3", active: true, owner: true, ready: true, player_name: "mchado", first: true },
+      { dir: "D:\\Machenia\\mundos\\mundo-2", name: "Ilha do Sara", active: false, owner: false, ready: true, player_name: "mchado", first: false },
+    ],
+    world_add_defaults: { coordinator_url: "https://…workers.dev", has_admin_token: true, player_name: "mchado" },
     setup_suggest_dir: { suggested_dir: "D:\\Machenia", existing_dir: null, minecraft_dir: null, launchers: [], direct_launch: true, free_space: 312 * 1024 ** 3, pending_invite: null, local_world: null },
   };
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {

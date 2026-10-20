@@ -4,6 +4,15 @@ As notas de cada versão aparecem para quem usa o app, no aviso "Atualização d
 Escreva em português, curto e do ponto de vista de quem joga. Formato: uma seção
 `## [X.Y.Z]` por versão, a mais nova em cima.
 
+## [2.3.0]
+
+- **Mais de um mundo no app.** Clique no nome do mundo, no topo da barra lateral, e em
+  **Adicionar mundo**: cole o convite de outro grupo (ou crie um mundo novo, se você é dono).
+  Abrir um link de convite com o app já instalado também funciona.
+- Um mundo fica aberto por vez: o escolhido no menu é o que aparece no Minecraft em
+  `localhost`. Para trocar, é só clicar no outro (pare o mundo antes se estiver hospedando).
+- O Java e o Minecraft são baixados uma vez só, para todos os mundos.
+
 ## [2.2.1]
 
 - **A nuvem do mundo não enche mais.** O app limpa sozinho as versões antigas depois de cada

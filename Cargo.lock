@@ -3197,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "machenia-app"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3224,7 +3224,7 @@ dependencies = [
 
 [[package]]
 name = "machenia-core"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "argon2",

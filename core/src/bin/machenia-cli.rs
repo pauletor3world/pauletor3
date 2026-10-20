@@ -163,7 +163,11 @@ async fn main() -> anyhow::Result<()> {
         .clone()
         .or_else(paths::resolve_data_dir)
         .ok_or_else(|| anyhow::anyhow!("pasta de dados não definida; use --home"))?;
-    let p = Paths::new(&home);
+    // sem --home: o mundo aberto no app (o Java e o Minecraft ficam na pasta do primeiro)
+    let p = match (&cli.home, paths::worlds()) {
+        (None, Some(w)) => w.paths(&home),
+        _ => Paths::new(&home),
+    };
     p.ensure()?;
     let _log = machenia_core::logging::init(&p.logs(), true)?;
 
